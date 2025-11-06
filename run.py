@@ -81,7 +81,7 @@ def run_remove(args):
 parser = argparse.ArgumentParser(
     prog='Container Development',
     description='Spinning up local environments based on container images that can interact with each other.',
-    epilog='The Epilogue'
+    epilog='For any questions, please attend the Arcodetype livestream (when it\'s on!)'
 )
 
 subparsers = parser.add_subparsers(help='subcommand help')
@@ -102,7 +102,6 @@ parser_remove.set_defaults(func=run_remove)
 
 if len(sys.argv) == 1:
     parser.print_help()
-    print('exiting')
     sys.exit()
 
 args = parser.parse_args()

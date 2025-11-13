@@ -59,7 +59,7 @@ def run_remove(args):
 
     existing_subdomain = get_nested(user_config, ['subdomains', args.name])
     if existing_subdomain is None:
-        print("No subdomains to remove")
+        print(f"Subdomains, {args.name}, does not exist")
         sys.exit()
 
     del user_config['subdomains'][args.name]
@@ -118,26 +118,37 @@ parser = argparse.ArgumentParser(
     epilog='For any questions, please attend the Arcodetype livestream (when it\'s on!)'
 )
 
-subparsers = parser.add_subparsers(help='subcommand help')
+subparsers = parser.add_subparsers(dest='command', help='subcommand help')
 
+# cdev deploy
 parser_deploy = subparsers.add_parser('deploy', help='deploys the environment')
 parser_deploy.set_defaults(func=run_deploy)
 
+# cdev shell
 parser_shell = subparsers.add_parser('shell', help='starts a shell instance')
 parser_shell.add_argument('environment')
 parser_shell.add_argument('container_image')
 parser_shell.set_defaults(func=run_shell)
 
-parser_add = subparsers.add_parser('add_subdomain', help='add a subdomain to the container development')
-parser_add.add_argument('-l', '--location', help='the location of the subdomain', required=True)
-parser_add.add_argument('-n', '--name', help='the name of the subdomain', required=True)
-parser_add.set_defaults(func=run_add)
+# cdev add
+parser_add = subparsers.add_parser('add', help='add to the container development')
+subparser_add = parser_add.add_subparsers(dest='add_command', help='add any of the following to the config')
 
-parser_remove = subparsers.add_parser('remove_subdomain', help='remove a subdomain to the container development')
-parser_remove.add_argument('-n', '--name', help='the name of the subdomain', required=True)
-parser_remove.add_argument('-l', '--location', help='the location of the subdomain (not used)', required=False)
-parser_remove.set_defaults(func=run_remove)
+# cdev add subdomain
+parser_add_subdomain = subparser_add.add_parser('subdomain', help='add subdomain')
+parser_add_subdomain.add_argument('-l', '--location', help='the location of the subdomain', required=True)
+parser_add_subdomain.add_argument('-n', '--name', help='the name of the subdomain', required=True)
+parser_add_subdomain.set_defaults(func=run_add)
 
+# cdev remove
+parser_remove = subparsers.add_parser('remove', help='remove from the container development')
+subparser_remove = parser_remove.add_subparsers(dest='remove_command', help='remove any of the following from the config')
+
+# cdev remove subdomain
+parser_remove_domain = subparser_remove.add_parser('subdomain', help='remove subdomain')
+parser_remove_domain.add_argument('-n', '--name', help='the name of the subdomain', required=True)
+parser_remove_domain.add_argument('-l', '--location', help='the location of the subdomain (not used)', required=False)
+parser_remove_domain.set_defaults(func=run_remove)
 
 if len(sys.argv) == 1:
     parser.print_help()
@@ -145,4 +156,14 @@ if len(sys.argv) == 1:
 
 args = parser.parse_args()
 
-args.func(args)
+if args.command == 'add' and args.add_command is None:
+    parser_add.print_help()
+    sys.exit()
+elif args.command == 'remove' and args.remove_command is None:
+    parser_remove.print_help()
+    sys.exit()
+
+if hasattr(args, 'func'):
+    args.func(args)
+else:
+    parser.print_help()

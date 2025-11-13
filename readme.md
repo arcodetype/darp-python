@@ -13,16 +13,21 @@
 - projects.<service-name>.arcodetype.test
 - sandbox.<service-name>.arcodetype.test
 
+### Ports
+
+The API container port is always `8000`. The host API port is assigned on `cDev deploy` 
+
 ## Potential Commands
 
-serveGo <go-image>
-shellGo <go-image>
-
-serveLara <php-image>
-shellLara <php-image>
-
-serveNode <node-image>
-shellNode <node-image>
-
-servePython <python-image>
-shellPython <python-image>
+cdev serve <image>
+cdev shell <image>
+cdev serve -e go <go-image>
+cdev shell -e go <go-image>
+cdev serve -e laravel <php-image>
+cdev shell -e laravel <php-image>
+cdev serve -e node <node-image>
+cdev shell -e node <node-image>
+cdev serve -e python <python-image>
+cdev shell -e python <python-image>
+cdev serve -e vue <vue-image>
+cdev shell -e vue <vue-image>

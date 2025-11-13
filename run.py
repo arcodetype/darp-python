@@ -69,7 +69,6 @@ def run_remove(args):
 
     print(f"removed '{args.name}'")
         
-
 def run_shell(args):
     filename='.config.json'    
 
@@ -111,6 +110,7 @@ def run_shell(args):
     # Inherits your terminal's stdin/stdout/stderr and TTY.
     subprocess.run(podman_command, check=True)
 
+# Command Line Interactions
 
 parser = argparse.ArgumentParser(
     prog='Container Development',
@@ -126,8 +126,8 @@ parser_deploy.set_defaults(func=run_deploy)
 
 # cdev shell
 parser_shell = subparsers.add_parser('shell', help='starts a shell instance')
-parser_shell.add_argument('environment')
-parser_shell.add_argument('container_image')
+parser_shell.add_argument('environment', help='The name of the environment to start the shell in')
+parser_shell.add_argument('container_image', help='The container image from which to create the shell instance')
 parser_shell.set_defaults(func=run_shell)
 
 # cdev add
@@ -136,18 +136,18 @@ subparser_add = parser_add.add_subparsers(dest='add_command', help='add any of t
 
 # cdev add subdomain
 parser_add_subdomain = subparser_add.add_parser('subdomain', help='add subdomain')
-parser_add_subdomain.add_argument('-l', '--location', help='the location of the subdomain', required=True)
-parser_add_subdomain.add_argument('-n', '--name', help='the name of the subdomain', required=True)
+parser_add_subdomain.add_argument('name', help='the name of the subdomain')
+parser_add_subdomain.add_argument('location', help='the location of the subdomain')
 parser_add_subdomain.set_defaults(func=run_add)
 
 # cdev remove
-parser_remove = subparsers.add_parser('remove', help='remove from the container development')
+parser_remove = subparsers.add_parser('rm', help='remove from the container development')
 subparser_remove = parser_remove.add_subparsers(dest='remove_command', help='remove any of the following from the config')
 
 # cdev remove subdomain
 parser_remove_domain = subparser_remove.add_parser('subdomain', help='remove subdomain')
-parser_remove_domain.add_argument('-n', '--name', help='the name of the subdomain', required=True)
-parser_remove_domain.add_argument('-l', '--location', help='the location of the subdomain (not used)', required=False)
+parser_remove_domain.add_argument('name', help='the name of the subdomain')
+parser_remove_domain.add_argument('location (optional)', nargs='?', help='the location of the subdomain')
 parser_remove_domain.set_defaults(func=run_remove)
 
 if len(sys.argv) == 1:
@@ -159,7 +159,7 @@ args = parser.parse_args()
 if args.command == 'add' and args.add_command is None:
     parser_add.print_help()
     sys.exit()
-elif args.command == 'remove' and args.remove_command is None:
+elif args.command == 'rm' and args.remove_command is None:
     parser_remove.print_help()
     sys.exit()
 

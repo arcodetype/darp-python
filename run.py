@@ -28,8 +28,83 @@ def get_user_config(filename):
 def run_deploy(args):
     print('Deploying Container Development')
 
+def run_add_portmap(args):
+    filename = '/Volumes/ritic/users/arcodetype/projects/container-development/.config.json'
+
+    user_config = get_user_config(filename)
+
+    existing_host_portmapping = get_nested(user_config, [
+        'subdomains',
+        args.subdomain_name,
+        'services',
+        args.service_name,
+        'host_portmappings',
+        args.host_port
+    ])
+
+    if existing_host_portmapping is not None:
+        print(f"Portmapping on host side '{args.subdomain_name}.{args.service_name}' ({args.host_port}:____) already exists")
+        sys.exit()
+
+    subdomains = user_config.get('subdomains')
+    if subdomains is None:
+        print(f"Subdomain, {args.subdomain_name}, does not exist")
+        sys.exit()
+
+    subdomain = subdomains.get(args.subdomain_name)
+    if subdomain is None:
+        print(f"Subdomain, {args.subdomain_name}, does not exist")
+        sys.exit()
+
+    services = subdomain.get('services')
+    if services is None:
+        services = {}
+
+    service = services.get(args.service_name)
+    if service is None:
+        service = {}
+
+    host_portmappings = service.get('host_portmappings')
+    if host_portmappings is None:
+        host_portmappings = {}
+
+    services[args.service_name] = service
+    service = host_portmappings
+    host_portmappings[args.host_port] = args.container_port
+
+    user_config['subdomains'][args.subdomain_name]['services'] = services
+
+    with open(filename, 'w') as f:
+        json.dump(user_config, f, indent=4)
+
+    print(f"Created portmapping for '{args.subdomain_name}.{args.service_name}' ({args.host_port}:{args.container_port})")
+
+def run_remove_portmap(args):
+    filename = '/Volumes/ritic/users/arcodetype/projects/container-development/.config.json'
+
+    user_config = get_user_config(filename)
+
+    existing_host_portmapping = get_nested(user_config, [
+        'subdomains',
+        args.subdomain_name,
+        'services',
+        args.service_name,
+        'host_portmappings',
+        args.host_port
+    ])
+    if existing_host_portmapping is None:
+        print(f"Portmapping on host side '{args.subdomain_name}.{args.service_name}' ({args.host_port}:____) does not exist")
+        sys.exit()
+
+    del user_config['subdomains'][args.subdomain_name]['services'][args.service_name]['host_portmappings'][args.host_port]
+
+    with open(filename, 'w') as f:
+        json.dump(user_config, f, indent=4)
+
+    print(f"Created portmapping for '{args.subdomain_name}.{args.service_name}' ({args.host_port}:____)")
+
 def run_add_subdomain(args):
-    filename = '.config.json'
+    filename = '/Volumes/ritic/users/arcodetype/projects/container-development/.config.json'
 
     user_config = get_user_config(filename)
 
@@ -53,7 +128,7 @@ def run_add_subdomain(args):
     print(f"created '{args.name}' at {args.location}")
 
 def run_remove_subdomain(args):
-    filename = '.config.json'
+    filename = '/Volumes/ritic/users/arcodetype/projects/container-development/.config.json'
 
     user_config = get_user_config(filename)
 
@@ -70,7 +145,7 @@ def run_remove_subdomain(args):
     print(f"removed '{args.name}'")
         
 def run_shell(args):
-    filename='.config.json'    
+    filename = '/Volumes/ritic/users/arcodetype/projects/container-development/.config.json'
 
     user_config = get_user_config(filename)
     environment = get_nested(user_config, ['environments', args.environment])
@@ -79,9 +154,6 @@ def run_shell(args):
         print("Environment does not exist.")
         sys.exit()
 
-    podman_command = []
-    podman_command.extend(["podman", "run"])
-    podman_command.extend(["--rm", "-it"])
 
     current_directory = os.getcwd()
     current_directory_name = os.path.basename(current_directory)
@@ -96,6 +168,10 @@ def run_shell(args):
         sys.exit()
 
     container_name = 'local_' + parent_directory_name + '_' + current_directory_name
+
+    podman_command = []
+    podman_command.extend(["podman", "run"])
+    podman_command.extend(["--rm", "-it"])
     podman_command.extend(['--name', container_name])
     podman_command.extend(['-v', f"{current_directory}:/app"])
 
@@ -105,13 +181,18 @@ def run_shell(args):
             sys.exit()
         podman_command.extend(['-v', f"{volume['host']}:{volume['container']}".replace("$(pwd)", current_directory)])
 
+    host_portmappings = get_nested(subdomain, ['services', current_directory_name, 'host_portmappings'])
+    if host_portmappings is not None:
+        for host_port, container_port in host_portmappings.items():
+            podman_command.extend(['-p', f"{host_port}:{container_port}"])
+
     podman_command.extend([args.container_image, 'sh'])
 
     # Inherits your terminal's stdin/stdout/stderr and TTY.
     subprocess.run(podman_command, check=True)
 
 def run_set_domain(args):
-    filename = '.config.json'
+    filename = '/Volumes/ritic/users/arcodetype/projects/container-development/.config.json'
 
     user_config = get_user_config(filename)
     user_config['domain'] = args.name
@@ -154,6 +235,14 @@ parser_set_domain.set_defaults(func=run_set_domain)
 parser_add = subparsers.add_parser('add', help='add to config')
 subparser_add = parser_add.add_subparsers(dest='add_command', help='add any of the following to the config')
 
+# cdev add port_override
+parser_add_portmap = subparser_add.add_parser('portmap', help='add port mapping to a service')
+parser_add_portmap.add_argument('subdomain_name', help='the name of the subdomain')
+parser_add_portmap.add_argument('service_name', help='the name of the service')
+parser_add_portmap.add_argument('host_port', type=str, help='the host port')
+parser_add_portmap.add_argument('container_port', type=str, help='the container port')
+parser_add_portmap.set_defaults(func=run_add_portmap)
+
 # cdev add subdomain
 parser_add_subdomain = subparser_add.add_parser('subdomain', help='add subdomain')
 parser_add_subdomain.add_argument('name', help='the name of the subdomain')
@@ -163,6 +252,14 @@ parser_add_subdomain.set_defaults(func=run_add_subdomain)
 # cdev remove
 parser_remove = subparsers.add_parser('rm', help='remove from config')
 subparser_remove = parser_remove.add_subparsers(dest='remove_command', help='remove any of the following from the config')
+
+# cdev add port_override
+parser_remove_portmap = subparser_remove.add_parser('portmap', help='remove port mapping to a service')
+parser_remove_portmap.add_argument('subdomain_name', help='the name of the subdomain')
+parser_remove_portmap.add_argument('service_name', help='the name of the service')
+parser_remove_portmap.add_argument('host_port', type=str, help='the host port')
+parser_remove_portmap.add_argument('container_port (optional)', nargs='?', type=str, help='the container port')
+parser_remove_portmap.set_defaults(func=run_remove_portmap)
 
 # cdev remove subdomain
 parser_remove_domain = subparser_remove.add_parser('subdomain', help='remove subdomain')

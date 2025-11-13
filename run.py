@@ -11,14 +11,7 @@ def get_nested(d, keys):
             return d
     return d
 
-def run_deploy(args):
-    print('Deploying Container Development')
-    print(args)
-    print('Running deploy')
-
-def run_add(args):
-    filename = '.user_config.json'
-
+def get_user_config(filename):
     if not os.path.exists(filename):
         with open(filename, 'w') as f:
             json.dump({}, f, indent=4)
@@ -26,10 +19,19 @@ def run_add(args):
 
     with open(filename) as f:
         try:
-            user_config = json.load(f)
+            return json.load(f)
         except json.decoder.JSONDecodeError:
             print(f"Not Json {filename}")
-            exit
+            sys.exit()
+    sys.exit()
+
+def run_deploy(args):
+    print('Deploying Container Development')
+
+def run_add(args):
+    filename = '.config.json'
+
+    user_config = get_user_config(filename)
 
     existing_subdomain = get_nested(user_config, ['subdomains', args.name])
     if existing_subdomain is not None:
@@ -51,19 +53,9 @@ def run_add(args):
     print(f"created '{args.name}' at {args.location}")
 
 def run_remove(args):
-    filename = '.user_config.json'
+    filename = '.config.json'
 
-    if not os.path.exists(filename):
-        with open(filename, 'w') as f:
-            json.dump({}, f, indent=4)
-            print(f"Created {filename}")
-
-    with open(filename) as f:
-        try:
-            user_config = json.load(f)
-        except json.decoder.JSONDecodeError:
-            print(f"Not Json {filename}")
-            exit
+    user_config = get_user_config(filename)
 
     existing_subdomain = get_nested(user_config, ['subdomains', args.name])
     if existing_subdomain is None:
@@ -79,15 +71,42 @@ def run_remove(args):
         
 
 def run_shell(args):
-    podman_command = [
-        "podman", "run",
-        "--rm",
-        "-it",
-        "--name", "local-go",
-        "-v", f"{os.getcwd()}:/app",
-        args.container_image,
-        "sh"
-    ]
+    filename='.config.json'    
+
+    user_config = get_user_config(filename)
+    environment = get_nested(user_config, ['environments', args.environment])
+
+    if environment is None:
+        print("Environment does not exist.")
+        sys.exit()
+
+    podman_command = []
+    podman_command.extend(["podman", "run"])
+    podman_command.extend(["--rm", "-it"])
+
+    current_directory = os.getcwd()
+    current_directory_name = os.path.basename(current_directory)
+    
+    parent_directory = os.path.dirname(current_directory)
+    parent_directory_name = os.path.basename(parent_directory)
+
+    subdomain = get_nested(user_config, ['subdomains', parent_directory_name])
+
+    if subdomain is None:
+        print(f"Subdomain, {parent_directory_name}, does not exist in cdev's subdomain configuration.")
+        sys.exit()
+
+    container_name = 'local_' + parent_directory_name + '_' + current_directory_name
+    podman_command.extend(['--name', container_name])
+    podman_command.extend(['-v', f"{current_directory}:/app"])
+
+    for volume in environment.get('volumes', []):
+        if not os.path.exists(volume['host'].replace("$(pwd)", current_directory)):
+            print(f"Volume, {volume['host']}, does not appear to exist.")
+            sys.exit()
+        podman_command.extend(['-v', f"{volume['host']}:{volume['container']}".replace("$(pwd)", current_directory)])
+
+    podman_command.extend([args.container_image, 'sh'])
 
     # Inherits your terminal's stdin/stdout/stderr and TTY.
     subprocess.run(podman_command, check=True)
@@ -105,6 +124,7 @@ parser_deploy = subparsers.add_parser('deploy', help='deploys the environment')
 parser_deploy.set_defaults(func=run_deploy)
 
 parser_shell = subparsers.add_parser('shell', help='starts a shell instance')
+parser_shell.add_argument('environment')
 parser_shell.add_argument('container_image')
 parser_shell.set_defaults(func=run_shell)
 

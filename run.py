@@ -4,6 +4,10 @@ import os
 import subprocess
 import sys
 
+home_directory = os.path.expanduser("~")
+cdev_root_env = os.environ.get('CDEV_ROOT', f"{home_directory}/.container_development")
+CDEV_ROOT = os.path.join(cdev_root_env, '')
+
 def get_nested(d, keys):
     for key in keys:
         d = d.get(key)
@@ -29,7 +33,7 @@ def run_deploy(args):
     print('Deploying Container Development')
 
 def run_add_portmap(args):
-    filename = '/Volumes/ritic/users/arcodetype/projects/container-development/.config.json'
+    filename = f"{CDEV_ROOT}config.json"
 
     user_config = get_user_config(filename)
 
@@ -80,7 +84,7 @@ def run_add_portmap(args):
     print(f"Created portmapping for '{args.subdomain_name}.{args.service_name}' ({args.host_port}:{args.container_port})")
 
 def run_remove_portmap(args):
-    filename = '/Volumes/ritic/users/arcodetype/projects/container-development/.config.json'
+    filename = f"{CDEV_ROOT}config.json"
 
     user_config = get_user_config(filename)
 
@@ -104,7 +108,7 @@ def run_remove_portmap(args):
     print(f"Created portmapping for '{args.subdomain_name}.{args.service_name}' ({args.host_port}:____)")
 
 def run_add_subdomain(args):
-    filename = '/Volumes/ritic/users/arcodetype/projects/container-development/.config.json'
+    filename = f"{CDEV_ROOT}config.json"
 
     user_config = get_user_config(filename)
 
@@ -128,7 +132,7 @@ def run_add_subdomain(args):
     print(f"created '{args.name}' at {args.location}")
 
 def run_remove_subdomain(args):
-    filename = '/Volumes/ritic/users/arcodetype/projects/container-development/.config.json'
+    filename = f"{CDEV_ROOT}config.json"
 
     user_config = get_user_config(filename)
 
@@ -145,7 +149,7 @@ def run_remove_subdomain(args):
     print(f"removed '{args.name}'")
         
 def run_shell(args):
-    filename = '/Volumes/ritic/users/arcodetype/projects/container-development/.config.json'
+    filename = f"{CDEV_ROOT}config.json"
 
     user_config = get_user_config(filename)
     environment = get_nested(user_config, ['environments', args.environment])
@@ -192,7 +196,7 @@ def run_shell(args):
     subprocess.run(podman_command, check=True)
 
 def run_set_domain(args):
-    filename = '/Volumes/ritic/users/arcodetype/projects/container-development/.config.json'
+    filename = f"{CDEV_ROOT}config.json"
 
     user_config = get_user_config(filename)
     user_config['domain'] = args.name
@@ -201,6 +205,27 @@ def run_set_domain(args):
         json.dump(user_config, f, indent=4)
 
     print(f"Domain set to  '{args.name}'")
+
+def run_set_cdev_root(args):
+    zshrc_path = os.path.expanduser('~/.zshrc')
+    
+    with open(zshrc_path, 'r') as file:
+        lines = file.readlines()
+    
+    lines = [line for line in lines if not line.startswith('export CDEV_ROOT=')]
+
+    while lines and lines[-1].strip() == '':
+        lines.pop()
+
+    lines.append(f'\nexport CDEV_ROOT="{args.NEW_CDEV_ROOT}"')
+    
+    with open(zshrc_path, 'w') as file:
+        file.writelines(lines)
+
+    print(f"CDEV_ROOT set to '{args.NEW_CDEV_ROOT}' and loaded into cdev. Note that other terminals may still have the old CDEV_ROOT loaded. Restart or run 'source ~/.zshrc' in those terminals to update.")
+
+    # Reload the .zshrc file
+    subprocess.run(['zsh'], check=True)
 
 # Command Line Interactions
 
@@ -230,6 +255,12 @@ subparser_set = parser_set.add_subparsers(dest='set_command', help='set any of t
 parser_set_domain = subparser_set.add_parser('domain', help='set domain')
 parser_set_domain.add_argument('name', help='the name of the domain')
 parser_set_domain.set_defaults(func=run_set_domain)
+
+# cdev set CDEV_ROOT
+parser_set_cdev_root = subparser_set.add_parser('CDEV_ROOT', help=f"set CDEV_ROOT (current: {CDEV_ROOT})")
+parser_set_cdev_root.add_argument('NEW_CDEV_ROOT', help=f"the new directory for contents of .container_development (current: {CDEV_ROOT})")
+parser_set_cdev_root.add_argument('-z', '--zhrc', help='the location of the .zshrc file', required=False)
+parser_set_cdev_root.set_defaults(func=run_set_cdev_root)
 
 # cdev add
 parser_add = subparsers.add_parser('add', help='add to config')

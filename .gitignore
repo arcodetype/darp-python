@@ -1,3 +1,6 @@
 .config.json
 .archive/
 .generated_files/
+build
+cdev.spec
+dist

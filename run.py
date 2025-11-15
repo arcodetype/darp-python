@@ -35,6 +35,16 @@ def get_user_config(filename):
             sys.exit()
     sys.exit()
 
+def get_running_darps():
+    try:
+        output = subprocess.check_output(
+            ['podman', 'ps', '--format', '{{.Names}}']
+        )
+        running_containers = output.decode().strip().splitlines()
+        return [x for x in running_containers if x.startswith('darp_')]
+    except:
+        return []
+
 def is_podman_running():
     try:
         output = subprocess.check_output(
@@ -71,50 +81,65 @@ def is_container_running(container_name) -> bool:
         print(f"Error checking containers: {e}")
         return False
 
-def restart_nginx_server():
-    if not is_container_running('darp-nginx'):
-        return start_nginx_server()
+def restart_reverse_proxy():
+    if not is_container_running('darp-reverse-proxy'):
+        return start_reverse_proxy()
     
-    nginx_command = []
-    nginx_command.extend(['podman', 'restart', 'darp-nginx'])
+    restart_command = []
+    restart_command.extend(['podman', 'restart', 'darp-reverse-proxy'])
 
-    print(f'restarting {Fore.GREEN}darp-nginx{Style.RESET_ALL}\n')
-
-    subprocess.run(nginx_command, check=False)
+    print(f'restarting {Fore.GREEN}darp-reverse-proxy{Style.RESET_ALL}')
 
     subprocess.Popen(
-        nginx_command,
+        restart_command,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL
     )
 
-def start_nginx_server():
-    if is_container_running('darp-nginx'):
+def start_reverse_proxy():
+    if is_container_running('darp-reverse-proxy'):
         return True
     
-    nginx_command = []
-    nginx_command.extend(['podman', 'run', '-d'])
-    nginx_command.extend(['--rm'])
-    nginx_command.extend(['--name', 'darp-nginx'])
-    nginx_command.extend(['-p', '80:80'])
-    nginx_command.extend(['-v', f'{DARP_ROOT}/vhost_local.conf:/etc/nginx/conf.d/vhost_local.conf' ])
-    nginx_command.extend(['nginx'])
+    start_command = []
+    start_command.extend(['podman', 'run', '-d'])
+    start_command.extend(['--rm'])
+    start_command.extend(['--name', 'darp-reverse-proxy'])
+    start_command.extend(['-p', '80:80'])
+    start_command.extend(['-v', f'{DARP_ROOT}/vhost_local.conf:/etc/nginx/conf.d/vhost_local.conf' ])
+    start_command.extend(['nginx'])
 
-    print(f'starting {Fore.GREEN}darp-nginx{Style.RESET_ALL}\n')
-
-    subprocess.run(nginx_command, check=False)
+    print(f'starting {Fore.GREEN}darp-reverse-proxy{Style.RESET_ALL}\n')
 
     subprocess.Popen(
-        nginx_command,
+        start_command,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL
     )
+
+def stop_running_darp(name):
+    print(f'stopping {Fore.CYAN + name + Style.RESET_ALL}')
+    stop_command = []
+    stop_command.extend(['podman', 'stop', name])
+
+    subprocess.Popen(
+        stop_command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+
+
+def stop_running_darps():
+    darps = get_running_darps()
+
+    for darp in darps:
+        stop_running_darp(darp)
 
 # Command Line Functions
 
 def run_deploy(args):
-    print('Deploying Container Development')
-    restart_nginx_server()
+    print('Deploying Container Development\n')
+    restart_reverse_proxy()
+    stop_running_darps()
 
 def run_add_portmap(args):
     filename = f"{DARP_ROOT}config.json"
@@ -255,7 +280,7 @@ def run_shell(args):
         print(f"Subdomain, {parent_directory_name}, does not exist in darp's subdomain configuration.")
         sys.exit()
 
-    container_name = 'local_' + parent_directory_name + '_' + current_directory_name
+    container_name = 'darp_' + parent_directory_name + '_' + current_directory_name
 
     podman_command = []
     podman_command.extend(["podman", "run"])
@@ -277,7 +302,12 @@ def run_shell(args):
     podman_command.extend([args.container_image, 'sh'])
 
     # Inherits your terminal's stdin/stdout/stderr and TTY.
-    subprocess.run(podman_command, check=True)
+    try:
+        subprocess.run(podman_command, check=True)
+    except subprocess.CalledProcessError as e:
+        if e.returncode == 137:
+            print(f'restarting {Fore.CYAN + container_name + Style.RESET_ALL}')
+            run_shell(args)
 
 def run_set_domain(args):
     filename = f"{DARP_ROOT}config.json"
@@ -322,7 +352,7 @@ if not is_unprivileged_port_start(80):
     print(f'podman-machine-default is set with port 80 privilged {Fore.RED}(see readme.md){Style.RESET_ALL}')
     sys.exit()
 
-start_nginx_server()
+start_reverse_proxy()
 
 # Configuration Checks
 

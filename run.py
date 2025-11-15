@@ -35,6 +35,16 @@ def get_user_config(filename):
             sys.exit()
     sys.exit()
 
+def is_podman_running():
+    try:
+        output = subprocess.check_output(
+            ['podman', 'machine', 'list', '--format', '{{.LastUp}}']
+        )
+        running_machines = output.strip().splitlines()
+        return b'Currently running' in running_machines
+    except:
+        return False
+
 def is_container_running(container_name) -> bool:
     try:
         output = subprocess.check_output(
@@ -270,6 +280,12 @@ def run_set_cdev_root(args):
     subprocess.run(['zsh'], check=True)
 
 # Start Up
+machine_running = is_podman_running()
+
+if not machine_running:
+    print(f'podman-machine-default is currently down {Fore.RED}(podman machine start){Style.RESET_ALL}')
+    sys.exit()
+
 start_nginx_server()
 
 # Configuration Checks

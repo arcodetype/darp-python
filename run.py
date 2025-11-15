@@ -370,10 +370,9 @@ if subdomains is not None and len(subdomains) > 0:
 # Command Line Interactions
 parser = argparse.ArgumentParser(
     prog=f'{Fore.GREEN}darp{Style.RESET_ALL}',
-    description=f'Spinning up {Fore.LIGHTBLUE_EX}local{Style.RESET_ALL} environments based on container images that can interact with each other.',
+    description=f'Your {Fore.LIGHTMAGENTA_EX}d{Style.RESET_ALL}irectories {Fore.LIGHTMAGENTA_EX}a{Style.RESET_ALL}uto-{Fore.LIGHTMAGENTA_EX}r{Style.RESET_ALL}everse {Fore.LIGHTMAGENTA_EX}p{Style.RESET_ALL}roxied.',
     epilog='For any questions, please attend the Arcodetype livestream (when it\'s on!)'
 )
-
 
 subparsers = parser.add_subparsers(dest='command', help='subcommand help')
 

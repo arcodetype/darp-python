@@ -45,6 +45,20 @@ def is_podman_running():
     except:
         return False
 
+def is_unprivileged_port_start(expected_port):
+    try:
+        # Run `sysctl` inside the Podman VM
+        result = subprocess.check_output(
+            ['podman', 'machine', 'ssh', 'sysctl', 'net.ipv4.ip_unprivileged_port_start'],
+            text=True
+        )
+        # Extract the port value from the output
+        _, value = result.strip().split('=')
+        actual_port = int(value.strip())
+        return actual_port <= expected_port
+    except subprocess.CalledProcessError as e:
+        return False
+
 def is_container_running(container_name) -> bool:
     try:
         output = subprocess.check_output(
@@ -284,6 +298,10 @@ machine_running = is_podman_running()
 
 if not machine_running:
     print(f'podman-machine-default is currently down {Fore.RED}(podman machine start){Style.RESET_ALL}')
+    sys.exit()
+
+if not is_unprivileged_port_start(80):
+    print(f'podman-machine-default is set with port 80 privilged {Fore.RED}(see readme.md){Style.RESET_ALL}')
     sys.exit()
 
 start_nginx_server()

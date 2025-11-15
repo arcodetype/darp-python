@@ -9,8 +9,8 @@ from colorama import Fore, Style, init
 init()
 
 home_directory = os.path.expanduser("~")
-cdev_root_env = os.environ.get('CDEV_ROOT', f"{home_directory}/.container_development")
-CDEV_ROOT = os.path.join(cdev_root_env, '')
+darp_root_env = os.environ.get('DARP_ROOT', f"{home_directory}/.container_development")
+DARP_ROOT = os.path.join(darp_root_env, '')
 
 # Helper Functions
 
@@ -72,18 +72,18 @@ def is_container_running(container_name) -> bool:
         return False
 
 def start_nginx_server():
-    if is_container_running('cdev-nginx'):
+    if is_container_running('darp-nginx'):
         return True
     
     nginx_command = []
     nginx_command.extend(['podman', 'run', '-d'])
     nginx_command.extend(['--rm'])
-    nginx_command.extend(['--name', 'cdev-nginx'])
+    nginx_command.extend(['--name', 'darp-nginx'])
     nginx_command.extend(['-p', '80:80'])
-    nginx_command.extend(['-v', f'{CDEV_ROOT}/vhost_local.conf:/etc/nginx/conf.d/vhost_local.conf' ])
+    nginx_command.extend(['-v', f'{DARP_ROOT}/vhost_local.conf:/etc/nginx/conf.d/vhost_local.conf' ])
     nginx_command.extend(['nginx'])
 
-    print(f'starting {Fore.GREEN}cdev-nginx{Style.RESET_ALL}\n')
+    print(f'starting {Fore.GREEN}darp-nginx{Style.RESET_ALL}\n')
 
     subprocess.run(nginx_command, check=False)
 
@@ -99,7 +99,7 @@ def run_deploy(args):
     print('Deploying Container Development')
 
 def run_add_portmap(args):
-    filename = f"{CDEV_ROOT}config.json"
+    filename = f"{DARP_ROOT}config.json"
 
     user_config = get_user_config(filename)
 
@@ -150,7 +150,7 @@ def run_add_portmap(args):
     print(f"Created portmapping for '{args.subdomain_name}.{args.service_name}' ({args.host_port}:{args.container_port})")
 
 def run_remove_portmap(args):
-    filename = f"{CDEV_ROOT}config.json"
+    filename = f"{DARP_ROOT}config.json"
 
     user_config = get_user_config(filename)
 
@@ -174,7 +174,7 @@ def run_remove_portmap(args):
     print(f"Created portmapping for '{args.subdomain_name}.{args.service_name}' ({args.host_port}:____)")
 
 def run_add_subdomain(args):
-    filename = f"{CDEV_ROOT}config.json"
+    filename = f"{DARP_ROOT}config.json"
 
     user_config = get_user_config(filename)
 
@@ -198,7 +198,7 @@ def run_add_subdomain(args):
     print(f"created '{args.name}' at {args.location}")
 
 def run_remove_subdomain(args):
-    filename = f"{CDEV_ROOT}config.json"
+    filename = f"{DARP_ROOT}config.json"
 
     user_config = get_user_config(filename)
 
@@ -215,7 +215,7 @@ def run_remove_subdomain(args):
     print(f"removed '{args.name}'")
         
 def run_shell(args):
-    filename = f"{CDEV_ROOT}config.json"
+    filename = f"{DARP_ROOT}config.json"
 
     user_config = get_user_config(filename)
     environment = get_nested(user_config, ['environments', args.environment])
@@ -234,7 +234,7 @@ def run_shell(args):
     subdomain = get_nested(user_config, ['subdomains', parent_directory_name])
 
     if subdomain is None:
-        print(f"Subdomain, {parent_directory_name}, does not exist in cdev's subdomain configuration.")
+        print(f"Subdomain, {parent_directory_name}, does not exist in darp's subdomain configuration.")
         sys.exit()
 
     container_name = 'local_' + parent_directory_name + '_' + current_directory_name
@@ -262,7 +262,7 @@ def run_shell(args):
     subprocess.run(podman_command, check=True)
 
 def run_set_domain(args):
-    filename = f"{CDEV_ROOT}config.json"
+    filename = f"{DARP_ROOT}config.json"
 
     user_config = get_user_config(filename)
     user_config['domain'] = args.name
@@ -272,23 +272,23 @@ def run_set_domain(args):
 
     print(f"Domain set to  '{args.name}'")
 
-def run_set_cdev_root(args):
+def run_set_darp_root(args):
     zshrc_path = os.path.expanduser('~/.zshrc')
     
     with open(zshrc_path, 'r') as file:
         lines = file.readlines()
     
-    lines = [line for line in lines if not line.startswith('export CDEV_ROOT=')]
+    lines = [line for line in lines if not line.startswith('export DARP_ROOT=')]
 
     while lines and lines[-1].strip() == '':
         lines.pop()
 
-    lines.append(f'\nexport CDEV_ROOT="{args.NEW_CDEV_ROOT}"')
+    lines.append(f'\nexport DARP_ROOT="{args.NEW_DARP_ROOT}"')
     
     with open(zshrc_path, 'w') as file:
         file.writelines(lines)
 
-    print(f"CDEV_ROOT set to '{args.NEW_CDEV_ROOT}' and loaded into cdev. Note that other terminals may still have the old CDEV_ROOT loaded. Restart or run 'source ~/.zshrc' in those terminals to update.")
+    print(f"DARP_ROOT set to '{args.NEW_DARP_ROOT}' and loaded into darp. Note that other terminals may still have the old DARP_ROOT loaded. Restart or run 'source ~/.zshrc' in those terminals to update.")
 
     # Reload the .zshrc file
     subprocess.run(['zsh'], check=True)
@@ -308,7 +308,7 @@ start_nginx_server()
 
 # Configuration Checks
 
-filename = f"{CDEV_ROOT}config.json"
+filename = f"{DARP_ROOT}config.json"
 user_config = get_user_config(filename)
 
 domain_is_set = user_config.get('domain')
@@ -321,7 +321,7 @@ if subdomains is not None and len(subdomains) > 0:
 
 # Command Line Interactions
 parser = argparse.ArgumentParser(
-    prog=f'{Fore.GREEN}cdev{Style.RESET_ALL}',
+    prog=f'{Fore.GREEN}darp{Style.RESET_ALL}',
     description=f'Spinning up {Fore.LIGHTBLUE_EX}local{Style.RESET_ALL} environments based on container images that can interact with each other.',
     epilog='For any questions, please attend the Arcodetype livestream (when it\'s on!)'
 )
@@ -329,7 +329,7 @@ parser = argparse.ArgumentParser(
 
 subparsers = parser.add_subparsers(dest='command', help='subcommand help')
 
-# cdev deploy
+# darp deploy
 deploy_style = Style.NORMAL if domain_is_set and subdomain_is_set else Style.DIM
 deploy_help_text = 'deploys the environment'
 deploy_help_reqs = []
@@ -360,32 +360,32 @@ if len(shell_help_reqs) > 0:
 parser_deploy = subparsers.add_parser(f'deploy', help=deploy_help_text)
 parser_deploy.set_defaults(func=run_deploy)
 
-# cdev shell
+# darp shell
 parser_shell = subparsers.add_parser('shell', help=shell_help_text)
 parser_shell.add_argument('environment', help='The name of the environment to start the shell in')
 parser_shell.add_argument('container_image', help='The container image from which to create the shell instance')
 parser_shell.set_defaults(func=run_shell)
 
-# cdev set
+# darp set
 parser_set = subparsers.add_parser('set', help='set config value')
 subparser_set = parser_set.add_subparsers(dest='set_command', help='set any of the following in the config')
 
-# cdev set domain
+# darp set domain
 parser_set_domain = subparser_set.add_parser('domain', help='set domain')
 parser_set_domain.add_argument('name', help='the name of the domain')
 parser_set_domain.set_defaults(func=run_set_domain)
 
-# cdev set CDEV_ROOT
-parser_set_cdev_root = subparser_set.add_parser('CDEV_ROOT', help=f"set CDEV_ROOT (current: {CDEV_ROOT})")
-parser_set_cdev_root.add_argument('NEW_CDEV_ROOT', help=f"the new directory for contents of .container_development (current: {CDEV_ROOT})")
-parser_set_cdev_root.add_argument('-z', '--zhrc', help='the location of the .zshrc file', required=False)
-parser_set_cdev_root.set_defaults(func=run_set_cdev_root)
+# darp set DARP_ROOT
+parser_set_darp_root = subparser_set.add_parser('DARP_ROOT', help=f"set DARP_ROOT (current: {DARP_ROOT})")
+parser_set_darp_root.add_argument('NEW_DARP_ROOT', help=f"the new directory for contents of .container_development (current: {DARP_ROOT})")
+parser_set_darp_root.add_argument('-z', '--zhrc', help='the location of the .zshrc file', required=False)
+parser_set_darp_root.set_defaults(func=run_set_darp_root)
 
-# cdev add
+# darp add
 parser_add = subparsers.add_parser('add', help='add to config')
 subparser_add = parser_add.add_subparsers(dest='add_command', help='add any of the following to the config')
 
-# cdev add port_override
+# darp add port_override
 parser_add_portmap = subparser_add.add_parser('portmap', help='add port mapping to a service')
 parser_add_portmap.add_argument('subdomain_name', help='the name of the subdomain')
 parser_add_portmap.add_argument('service_name', help='the name of the service')
@@ -393,17 +393,17 @@ parser_add_portmap.add_argument('host_port', type=str, help='the host port')
 parser_add_portmap.add_argument('container_port', type=str, help='the container port')
 parser_add_portmap.set_defaults(func=run_add_portmap)
 
-# cdev add subdomain
+# darp add subdomain
 parser_add_subdomain = subparser_add.add_parser('subdomain', help='add subdomain')
 parser_add_subdomain.add_argument('name', help='the name of the subdomain')
 parser_add_subdomain.add_argument('location', help='the location of the subdomain')
 parser_add_subdomain.set_defaults(func=run_add_subdomain)
 
-# cdev remove
+# darp remove
 parser_remove = subparsers.add_parser('rm', help='remove from config')
 subparser_remove = parser_remove.add_subparsers(dest='remove_command', help='remove any of the following from the config')
 
-# cdev add port_override
+# darp add port_override
 parser_remove_portmap = subparser_remove.add_parser('portmap', help='remove port mapping to a service')
 parser_remove_portmap.add_argument('subdomain_name', help='the name of the subdomain')
 parser_remove_portmap.add_argument('service_name', help='the name of the service')
@@ -411,7 +411,7 @@ parser_remove_portmap.add_argument('host_port', type=str, help='the host port')
 parser_remove_portmap.add_argument('container_port (optional)', nargs='?', type=str, help='the container port')
 parser_remove_portmap.set_defaults(func=run_remove_portmap)
 
-# cdev remove subdomain
+# darp remove subdomain
 parser_remove_domain = subparser_remove.add_parser('subdomain', help='remove subdomain')
 parser_remove_domain.add_argument('name', help='the name of the subdomain')
 parser_remove_domain.add_argument('location (optional)', nargs='?', help='the location of the subdomain')

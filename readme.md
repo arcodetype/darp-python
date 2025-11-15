@@ -12,7 +12,7 @@
 ## Build
 
 ```sh
-pyinstaller --name cdev --onefile run.py
+pyinstaller --name darp --onefile run.py
 ```
 
 ## Setup
@@ -39,19 +39,19 @@ podman machine ssh "echo 'net.ipv4.ip_unprivileged_port_start=80' \
 
 ### Ports
 
-The API container port is always `8000`. The host API port is assigned on `cDev deploy` 
+The API container port is always `8000`. The host API port is assigned on `darp deploy` 
 
 ## Potential Commands
 
-cdev serve <image>
-cdev shell <image>
-cdev serve -e go <go-image>
-cdev shell -e go <go-image>
-cdev serve -e laravel <php-image>
-cdev shell -e laravel <php-image>
-cdev serve -e node <node-image>
-cdev shell -e node <node-image>
-cdev serve -e python <python-image>
-cdev shell -e python <python-image>
-cdev serve -e vue <vue-image>
-cdev shell -e vue <vue-image>
+darp serve <image>
+darp shell <image>
+darp serve -e go <go-image>
+darp shell -e go <go-image>
+darp serve -e laravel <php-image>
+darp shell -e laravel <php-image>
+darp serve -e node <node-image>
+darp shell -e node <node-image>
+darp serve -e python <python-image>
+darp shell -e python <python-image>
+darp serve -e vue <vue-image>
+darp shell -e vue <vue-image>

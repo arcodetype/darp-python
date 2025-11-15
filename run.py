@@ -4,9 +4,15 @@ import os
 import subprocess
 import sys
 
+from colorama import Fore, Style, init
+
+init()
+
 home_directory = os.path.expanduser("~")
 cdev_root_env = os.environ.get('CDEV_ROOT', f"{home_directory}/.container_development")
 CDEV_ROOT = os.path.join(cdev_root_env, '')
+
+# Helper Functions
 
 def get_nested(d, keys):
     for key in keys:
@@ -28,6 +34,8 @@ def get_user_config(filename):
             print(f"Not Json {filename}")
             sys.exit()
     sys.exit()
+
+# Command Line Functions
 
 def run_deploy(args):
     print('Deploying Container Development')
@@ -227,22 +235,62 @@ def run_set_cdev_root(args):
     # Reload the .zshrc file
     subprocess.run(['zsh'], check=True)
 
-# Command Line Interactions
+# Configuration Checks
 
+filename = f"{CDEV_ROOT}config.json"
+user_config = get_user_config(filename)
+
+domain_is_set = user_config.get('domain')
+
+subdomain_is_set = False
+subdomains = user_config.get('subdomains')
+if subdomains is not None and len(subdomains) > 0:
+    subdomain_is_set = True
+
+
+# Command Line Interactions
 parser = argparse.ArgumentParser(
-    prog='Container Development',
-    description='Spinning up local environments based on container images that can interact with each other.',
+    prog=f'{Fore.GREEN}cdev{Style.RESET_ALL}',
+    description=f'Spinning up {Fore.LIGHTBLUE_EX}local{Style.RESET_ALL} environments based on container images that can interact with each other.',
     epilog='For any questions, please attend the Arcodetype livestream (when it\'s on!)'
 )
+
 
 subparsers = parser.add_subparsers(dest='command', help='subcommand help')
 
 # cdev deploy
-parser_deploy = subparsers.add_parser('deploy', help='deploys the environment')
+deploy_style = Style.NORMAL if domain_is_set and subdomain_is_set else Style.DIM
+deploy_help_text = 'deploys the environment'
+deploy_help_reqs = []
+shell_help_text = 'starts a shell instance'
+shell_help_reqs = []
+
+if not domain_is_set:
+    deploy_help_reqs.append('set domain')
+
+if not subdomain_is_set:
+    deploy_help_reqs.append('add subdomain')
+
+if len(deploy_help_reqs) > 0:
+    shell_help_reqs.append('deploy')
+    deploy_help_text = Style.DIM + deploy_help_text + Style.RESET_ALL
+    deploy_help_text += ' ('
+    for action in deploy_help_reqs:
+        deploy_help_text += f" '{Fore.BLUE + action + Style.RESET_ALL}'"
+    deploy_help_text += ' )'
+
+if len(shell_help_reqs) > 0:
+    shell_help_text = Style.DIM + shell_help_text + Style.RESET_ALL
+    shell_help_text += ' ('
+    for action in shell_help_reqs:
+        shell_help_text += f" '{Fore.BLUE + action + Style.RESET_ALL}'"
+    shell_help_text += ' )'
+
+parser_deploy = subparsers.add_parser(f'deploy', help=deploy_help_text)
 parser_deploy.set_defaults(func=run_deploy)
 
 # cdev shell
-parser_shell = subparsers.add_parser('shell', help='starts a shell instance')
+parser_shell = subparsers.add_parser('shell', help=shell_help_text)
 parser_shell.add_argument('environment', help='The name of the environment to start the shell in')
 parser_shell.add_argument('container_image', help='The container image from which to create the shell instance')
 parser_shell.set_defaults(func=run_shell)

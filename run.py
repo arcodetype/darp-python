@@ -71,6 +71,23 @@ def is_container_running(container_name) -> bool:
         print(f"Error checking containers: {e}")
         return False
 
+def restart_nginx_server():
+    if not is_container_running('darp-nginx'):
+        return start_nginx_server()
+    
+    nginx_command = []
+    nginx_command.extend(['podman', 'restart', 'darp-nginx'])
+
+    print(f'restarting {Fore.GREEN}darp-nginx{Style.RESET_ALL}\n')
+
+    subprocess.run(nginx_command, check=False)
+
+    subprocess.Popen(
+        nginx_command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+
 def start_nginx_server():
     if is_container_running('darp-nginx'):
         return True
@@ -97,6 +114,7 @@ def start_nginx_server():
 
 def run_deploy(args):
     print('Deploying Container Development')
+    restart_nginx_server()
 
 def run_add_portmap(args):
     filename = f"{DARP_ROOT}config.json"

@@ -35,6 +35,40 @@ def get_user_config(filename):
             sys.exit()
     sys.exit()
 
+def is_container_running(container_name) -> bool:
+    try:
+        output = subprocess.check_output(
+            ['podman', 'container', 'ls', '--format', '{{.Names}}'],
+            text=True
+        )
+        running_containers = output.strip().splitlines()
+        return container_name in running_containers
+    except subprocess.CalledProcessError as e:
+        print(f"Error checking containers: {e}")
+        return False
+
+def start_nginx_server():
+    if is_container_running('cdev-nginx'):
+        return True
+    
+    nginx_command = []
+    nginx_command.extend(['podman', 'run', '-d'])
+    nginx_command.extend(['--rm'])
+    nginx_command.extend(['--name', 'cdev-nginx'])
+    nginx_command.extend(['-p', '80:80'])
+    nginx_command.extend(['-v', f'{CDEV_ROOT}/vhost_local.conf:/etc/nginx/conf.d/vhost_local.conf' ])
+    nginx_command.extend(['nginx'])
+
+    print(f'starting {Fore.GREEN}cdev-nginx{Style.RESET_ALL}\n')
+
+    subprocess.run(nginx_command, check=False)
+
+    subprocess.Popen(
+        nginx_command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+
 # Command Line Functions
 
 def run_deploy(args):
@@ -234,6 +268,9 @@ def run_set_cdev_root(args):
 
     # Reload the .zshrc file
     subprocess.run(['zsh'], check=True)
+
+# Start Up
+start_nginx_server()
 
 # Configuration Checks
 

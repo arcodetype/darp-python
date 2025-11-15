@@ -1,6 +1,7 @@
 .config.json
 .archive/
 .generated_files/
+.vscode/
 build
 darp.spec
 dist

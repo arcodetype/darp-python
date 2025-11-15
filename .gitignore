@@ -4,3 +4,4 @@
 build
 cdev.spec
 dist
+.DS_Store

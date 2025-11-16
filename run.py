@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 from colorama import Fore, Style, init
+from datetime import datetime
 
 init()
 
@@ -182,6 +183,9 @@ def run_init(args):
 
     subprocess.run(["mkdir", "-p", f'{DARP_ROOT}dnsmasq.d'], check=True)
 
+    # generate nginx.conf
+    subprocess.run(["cp", 'nginx.conf', f'{DARP_ROOT}'], check=True)
+
     with open(f'{DARP_ROOT}dnsmasq.d/test.conf', 'w') as file:
         lines = [
             'address=/.test/127.0.0.1\n',
@@ -193,6 +197,66 @@ def run_init(args):
 
 def run_deploy(args):
     print('Deploying Container Development\n')
+
+    filename = f"{DARP_ROOT}config.json"
+    user_config = get_user_config(filename)
+
+    domains = user_config.get('domains')
+    if domains is None:
+        print(f"Please configure a domain.")
+        sys.exit()
+
+    # mv old files to backup location
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    subprocess.run(["mkdir", "-p", f'{DARP_ROOT}backup_{timestamp}'], check=True)
+    subprocess.run(["mv",
+            f'{DARP_ROOT}hosts_container',
+            f'{DARP_ROOT}portmap.json',
+            f'{DARP_ROOT}vhost_container.conf', f'{DARP_ROOT}backup_{timestamp}'
+        ],
+        check=True
+    )
+
+    # generate hosts container, generate portmap.json, generate vhost_container.conf
+    hosts_container = []
+    portmap = {}
+    port_number = 50100
+
+    podman_host_template = """server {{
+        listen 80;
+        server_name {url};
+        location / {{
+            proxy_pass http://host.containers.internal:{port}/;
+            proxy_set_header Host $host;
+        }}
+    }}\n\n"""
+
+    vhost_container = []
+
+    for domain_name, domain in domains.items():
+        portmap[domain_name] = {}
+        process = subprocess.run("ls -l " + domain['location'] + "| grep drwxr-xr | awk '{print $9}'", shell=True, capture_output=True, text=True, check=False)
+        stdout = process.stdout
+        folders = stdout.splitlines()
+        for folder in folders:
+            portmap[domain_name][folder] = port_number
+            url = f'{folder}.{domain_name}.test'
+            hosts_container.append(f'0.0.0.0   {url}\n')
+            vhost_container.append(podman_host_template.format(url = url, port = port_number) + '\n')
+            port_number += 1
+
+    with open(f'{DARP_ROOT}hosts_container', 'w') as file:
+        file.writelines(hosts_container)
+
+    with open(f'{DARP_ROOT}portmap.json', 'w') as f:
+        json.dump(portmap, f, indent=4)
+
+    with open(f'{DARP_ROOT}vhost_container.conf', 'w') as file:
+        file.writelines(vhost_container)
+
+    # delete backup location
+    subprocess.run(["rm", "-rf", f'{DARP_ROOT}backup_{timestamp}'], check=True)
+
     restart_reverse_proxy()
     stop_running_darps()
 

@@ -45,13 +45,23 @@ def get_running_darps():
     except:
         return []
 
+def is_init_initalized():
+    try:
+        output = subprocess.check_output(
+            ['cat', '/etc/resolver/test']
+        )
+        result = output.decode().strip()
+        return 'nameserver 127.0.0.1' == result
+    except:
+        return False
+
 def is_podman_running():
     try:
         output = subprocess.check_output(
             ['podman', 'machine', 'list', '--format', '{{.LastUp}}']
         )
-        running_machines = output.strip().splitlines()
-        return b'Currently running' in running_machines
+        running_machines = output.decode().strip().splitlines()
+        return 'Currently running' in running_machines
     except:
         return False
 
@@ -72,10 +82,9 @@ def is_unprivileged_port_start(expected_port):
 def is_container_running(container_name):
     try:
         output = subprocess.check_output(
-            ['podman', 'container', 'ls', '--format', '{{.Names}}'],
-            text=True
+            ['podman', 'container', 'ls', '--format', '{{.Names}}']
         )
-        running_containers = output.strip().splitlines()
+        running_containers = output.decode().strip().splitlines()
         return container_name in running_containers
     except subprocess.CalledProcessError as e:
         print(f"Error checking containers: {e}")
@@ -134,6 +143,36 @@ def stop_running_darps():
         stop_running_darp(darp)
 
 # Command Line Functions
+
+def run_init(args):
+    print(f'Running initialization')
+    # Create the directory
+    subprocess.run(["sudo", "mkdir", "-p", "/etc/resolver"], check=True)
+
+    # Write the resolver file
+    subprocess.run(
+        ["sudo", "tee", "/etc/resolver/test"],
+        input="nameserver 127.0.0.1\n",
+        text=True,
+        check=True
+    )
+    print(f'\n{Fore.GREEN}/etc/resolver/test{Style.RESET_ALL} created')
+
+    with open(f'{DARP_ROOT}dnsmasq.conf', 'w') as file:
+        lines = [
+            'listen-address=0.0.0.0\n',
+            'no-hosts\n',
+            'no-resolv\n',
+            'address=/.test/127.0.0.1\n',
+            '\n',
+            '# Optional logging\n',
+            'log-queries\n',
+            'log-facility=/var/log/dnsmasq.log\n',
+        ]
+        file.writelines(lines)
+
+    print(f'{Fore.GREEN}{DARP_ROOT}dnsmasq.conf{Style.RESET_ALL} created')
+
 
 def run_deploy(args):
     print('Deploying Container Development\n')
@@ -363,12 +402,28 @@ parser = argparse.ArgumentParser(
 
 subparsers = parser.add_subparsers(dest='command')
 
-# darp deploy
-deploy_style = Style.NORMAL if domain_is_set else Style.DIM
+dns_mask_test_exists = is_init_initalized()
+
+# darp init
+init_help_text = 'sudo (one time) initialization'
+init_help_reqs = []
 deploy_help_text = 'deploys the environment'
 deploy_help_reqs = []
 shell_help_text = 'starts a shell instance'
 shell_help_reqs = []
+
+if (dns_mask_test_exists):
+    init_help_reqs.append('initialized')
+else:
+    deploy_help_reqs.append('init')
+    shell_help_reqs.append('init')
+
+if len(init_help_reqs) > 0:
+    init_help_text = Style.DIM + init_help_text + Style.RESET_ALL
+    init_help_text += ' ('
+    for action in init_help_reqs:
+        init_help_text += f" '{Fore.BLUE + action + Style.RESET_ALL}'"
+    init_help_text += ' )'
 
 if not domain_is_set:
     deploy_help_reqs.append('add domain')
@@ -388,6 +443,11 @@ if len(shell_help_reqs) > 0:
         shell_help_text += f" '{Fore.BLUE + action + Style.RESET_ALL}'"
     shell_help_text += ' )'
 
+# darp init
+parser_init = subparsers.add_parser(f'init', help=init_help_text, usage=argparse.SUPPRESS)
+parser_init.set_defaults(func=run_init)
+
+# darp deploy
 parser_deploy = subparsers.add_parser(f'deploy', help=deploy_help_text, usage=argparse.SUPPRESS)
 parser_deploy.set_defaults(func=run_deploy)
 

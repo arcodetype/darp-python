@@ -69,7 +69,7 @@ def is_unprivileged_port_start(expected_port):
     except subprocess.CalledProcessError as e:
         return False
 
-def is_container_running(container_name) -> bool:
+def is_container_running(container_name):
     try:
         output = subprocess.check_output(
             ['podman', 'container', 'ls', '--format', '{{.Names}}'],
@@ -127,7 +127,6 @@ def stop_running_darp(name):
         stderr=subprocess.DEVNULL
     )
 
-
 def stop_running_darps():
     darps = get_running_darps()
 
@@ -147,8 +146,8 @@ def run_add_portmap(args):
     user_config = get_user_config(filename)
 
     existing_host_portmapping = get_nested(user_config, [
-        'subdomains',
-        args.subdomain_name,
+        'domains',
+        args.domain_name,
         'services',
         args.service_name,
         'host_portmappings',
@@ -156,20 +155,20 @@ def run_add_portmap(args):
     ])
 
     if existing_host_portmapping is not None:
-        print(f"Portmapping on host side '{args.subdomain_name}.{args.service_name}' ({args.host_port}:____) already exists")
+        print(f"Portmapping on host side '{args.domain_name}.{args.service_name}' ({args.host_port}:____) already exists")
         sys.exit()
 
-    subdomains = user_config.get('subdomains')
-    if subdomains is None:
-        print(f"Subdomain, {args.subdomain_name}, does not exist")
+    domains = user_config.get('domains')
+    if domains is None:
+        print(f"domain, {args.domain_name}, does not exist")
         sys.exit()
 
-    subdomain = subdomains.get(args.subdomain_name)
-    if subdomain is None:
-        print(f"Subdomain, {args.subdomain_name}, does not exist")
+    domain = domains.get(args.domain_name)
+    if domain is None:
+        print(f"domain, {args.domain_name}, does not exist")
         sys.exit()
 
-    services = subdomain.get('services')
+    services = domain.get('services')
     if services is None:
         services = {}
 
@@ -185,12 +184,12 @@ def run_add_portmap(args):
     service = host_portmappings
     host_portmappings[args.host_port] = args.container_port
 
-    user_config['subdomains'][args.subdomain_name]['services'] = services
+    user_config['domains'][args.domain_name]['services'] = services
 
     with open(filename, 'w') as f:
         json.dump(user_config, f, indent=4)
 
-    print(f"Created portmapping for '{args.subdomain_name}.{args.service_name}' ({args.host_port}:{args.container_port})")
+    print(f"Created portmapping for '{args.domain_name}.{args.service_name}' ({args.host_port}:{args.container_port})")
 
 def run_remove_portmap(args):
     filename = f"{DARP_ROOT}config.json"
@@ -198,59 +197,59 @@ def run_remove_portmap(args):
     user_config = get_user_config(filename)
 
     existing_host_portmapping = get_nested(user_config, [
-        'subdomains',
-        args.subdomain_name,
+        'domains',
+        args.domain_name,
         'services',
         args.service_name,
         'host_portmappings',
         args.host_port
     ])
     if existing_host_portmapping is None:
-        print(f"Portmapping on host side '{args.subdomain_name}.{args.service_name}' ({args.host_port}:____) does not exist")
+        print(f"Portmapping on host side '{args.domain_name}.{args.service_name}' ({args.host_port}:____) does not exist")
         sys.exit()
 
-    del user_config['subdomains'][args.subdomain_name]['services'][args.service_name]['host_portmappings'][args.host_port]
+    del user_config['domains'][args.domain_name]['services'][args.service_name]['host_portmappings'][args.host_port]
 
     with open(filename, 'w') as f:
         json.dump(user_config, f, indent=4)
 
-    print(f"Created portmapping for '{args.subdomain_name}.{args.service_name}' ({args.host_port}:____)")
+    print(f"Created portmapping for '{args.domain_name}.{args.service_name}' ({args.host_port}:____)")
 
-def run_add_subdomain(args):
+def run_add_domain(args):
     filename = f"{DARP_ROOT}config.json"
 
     user_config = get_user_config(filename)
 
-    existing_subdomain = get_nested(user_config, ['subdomains', args.name])
-    if existing_subdomain is not None:
-        print(f"subdomain {args.name} already exists at {existing_subdomain['location']}")
+    existing_domain = get_nested(user_config, ['domains', args.name])
+    if existing_domain is not None:
+        print(f"domain {args.name} already exists at {existing_domain['location']}")
         sys.exit()
 
-    subdomains = user_config.get('subdomains')
-    if subdomains is None:
-        user_config['subdomains'] = {}
+    domains = user_config.get('domains')
+    if domains is None:
+        user_config['domains'] = {}
 
-    subdomain = {
+    domain = {
         'location': args.location,
     }
-    user_config['subdomains'][args.name] = subdomain
+    user_config['domains'][args.name] = domain
 
     with open(filename, 'w') as f:
         json.dump(user_config, f, indent=4)
 
     print(f"created '{args.name}' at {args.location}")
 
-def run_remove_subdomain(args):
+def run_remove_domain(args):
     filename = f"{DARP_ROOT}config.json"
 
     user_config = get_user_config(filename)
 
-    existing_subdomain = get_nested(user_config, ['subdomains', args.name])
-    if existing_subdomain is None:
-        print(f"Subdomains, {args.name}, does not exist")
+    existing_domain = get_nested(user_config, ['domains', args.name])
+    if existing_domain is None:
+        print(f"domains, {args.name}, does not exist")
         sys.exit()
 
-    del user_config['subdomains'][args.name]
+    del user_config['domains'][args.name]
 
     with open(filename, 'w') as f:
         json.dump(user_config, f, indent=4)
@@ -274,10 +273,10 @@ def run_shell(args):
     parent_directory = os.path.dirname(current_directory)
     parent_directory_name = os.path.basename(parent_directory)
 
-    subdomain = get_nested(user_config, ['subdomains', parent_directory_name])
+    domain = get_nested(user_config, ['domains', parent_directory_name])
 
-    if subdomain is None:
-        print(f"Subdomain, {parent_directory_name}, does not exist in darp's subdomain configuration.")
+    if domain is None:
+        print(f"domain, {parent_directory_name}, does not exist in darp's domain configuration.")
         sys.exit()
 
     container_name = 'darp_' + parent_directory_name + '_' + current_directory_name
@@ -294,7 +293,7 @@ def run_shell(args):
             sys.exit()
         podman_command.extend(['-v', f"{volume['host']}:{volume['container']}".replace("$(pwd)", current_directory)])
 
-    host_portmappings = get_nested(subdomain, ['services', current_directory_name, 'host_portmappings'])
+    host_portmappings = get_nested(domain, ['services', current_directory_name, 'host_portmappings'])
     if host_portmappings is not None:
         for host_port, container_port in host_portmappings.items():
             podman_command.extend(['-p', f"{host_port}:{container_port}"])
@@ -348,10 +347,10 @@ start_reverse_proxy()
 filename = f"{DARP_ROOT}config.json"
 user_config = get_user_config(filename)
 
-subdomain_is_set = False
-subdomains = user_config.get('subdomains')
-if subdomains is not None and len(subdomains) > 0:
-    subdomain_is_set = True
+domain_is_set = False
+domains = user_config.get('domains')
+if domains is not None and len(domains) > 0:
+    domain_is_set = True
 
 
 # Command Line Interactions
@@ -365,14 +364,14 @@ parser = argparse.ArgumentParser(
 subparsers = parser.add_subparsers(dest='command')
 
 # darp deploy
-deploy_style = Style.NORMAL if subdomain_is_set else Style.DIM
+deploy_style = Style.NORMAL if domain_is_set else Style.DIM
 deploy_help_text = 'deploys the environment'
 deploy_help_reqs = []
 shell_help_text = 'starts a shell instance'
 shell_help_reqs = []
 
-if not subdomain_is_set:
-    deploy_help_reqs.append('add subdomain')
+if not domain_is_set:
+    deploy_help_reqs.append('add domain')
 
 if len(deploy_help_reqs) > 0:
     shell_help_reqs.append('deploy')
@@ -414,17 +413,17 @@ subparser_add = parser_add.add_subparsers(dest='add_command', help='add any of t
 
 # darp add port_override
 parser_add_portmap = subparser_add.add_parser('portmap', help='add port mapping to a service', usage=argparse.SUPPRESS)
-parser_add_portmap.add_argument('subdomain_name', help='the name of the subdomain')
+parser_add_portmap.add_argument('domain_name', help='the name of the domain')
 parser_add_portmap.add_argument('service_name', help='the name of the service')
 parser_add_portmap.add_argument('host_port', type=str, help='the host port')
 parser_add_portmap.add_argument('container_port', type=str, help='the container port')
 parser_add_portmap.set_defaults(func=run_add_portmap)
 
-# darp add subdomain
-parser_add_subdomain = subparser_add.add_parser('subdomain', help='add subdomain', usage=argparse.SUPPRESS)
-parser_add_subdomain.add_argument('name', help='the name of the subdomain')
-parser_add_subdomain.add_argument('location', help='the location of the subdomain')
-parser_add_subdomain.set_defaults(func=run_add_subdomain)
+# darp add domain
+parser_add_domain = subparser_add.add_parser('domain', help='add domain', usage=argparse.SUPPRESS)
+parser_add_domain.add_argument('name', help='the name of the domain')
+parser_add_domain.add_argument('location', help='the location of the domain')
+parser_add_domain.set_defaults(func=run_add_domain)
 
 # darp remove
 parser_remove = subparsers.add_parser('rm', help='remove from config', usage=argparse.SUPPRESS)
@@ -432,17 +431,17 @@ subparser_remove = parser_remove.add_subparsers(dest='remove_command', help='rem
 
 # darp add port_override
 parser_remove_portmap = subparser_remove.add_parser('portmap', help='remove port mapping to a service', usage=argparse.SUPPRESS)
-parser_remove_portmap.add_argument('subdomain_name', help='the name of the subdomain')
+parser_remove_portmap.add_argument('domain_name', help='the name of the domain')
 parser_remove_portmap.add_argument('service_name', help='the name of the service')
 parser_remove_portmap.add_argument('host_port', type=str, help='the host port')
 parser_remove_portmap.add_argument('container_port (optional)', nargs='?', type=str, help='the container port')
 parser_remove_portmap.set_defaults(func=run_remove_portmap)
 
-# darp remove subdomain
-parser_remove_subdomain = subparser_remove.add_parser('subdomain', help='remove subdomain', usage=argparse.SUPPRESS)
-parser_remove_subdomain.add_argument('name', help='the name of the subdomain')
-parser_remove_subdomain.add_argument('location (optional)', nargs='?', help='the location of the subdomain')
-parser_remove_subdomain.set_defaults(func=run_remove_subdomain)
+# darp remove domain
+parser_remove_domain = subparser_remove.add_parser('domain', help='remove domain', usage=argparse.SUPPRESS)
+parser_remove_domain.add_argument('name', help='the name of the domain')
+parser_remove_domain.add_argument('location (optional)', nargs='?', help='the location of the domain')
+parser_remove_domain.set_defaults(func=run_remove_domain)
 
 if len(sys.argv) == 1:
     parser.print_help()

@@ -9,7 +9,7 @@ from colorama import Fore, Style, init
 init()
 
 home_directory = os.path.expanduser("~")
-darp_root_env = os.environ.get('DARP_ROOT', f"{home_directory}/.container_development")
+darp_root_env = os.environ.get('DARP_ROOT', f"{home_directory}/.darp")
 DARP_ROOT = os.path.join(darp_root_env, '')
 
 # Helper Functions
@@ -463,7 +463,7 @@ subparser_set = parser_set.add_subparsers(dest='set_command', help='set any of t
 
 # darp set DARP_ROOT
 parser_set_darp_root = subparser_set.add_parser('DARP_ROOT', help=f"set DARP_ROOT (current: {DARP_ROOT})", usage=argparse.SUPPRESS)
-parser_set_darp_root.add_argument('NEW_DARP_ROOT', help=f"the new directory for contents of .container_development (current: {DARP_ROOT})")
+parser_set_darp_root.add_argument('NEW_DARP_ROOT', help=f"the new directory for contents of .darp (current: {DARP_ROOT})")
 parser_set_darp_root.add_argument('-z', '--zhrc', help='the location of the .zshrc file', required=False)
 parser_set_darp_root.set_defaults(func=run_set_darp_root)
 

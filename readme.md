@@ -33,7 +33,7 @@ podman machine init --now \
   -v /Users:/Users -v /private:/private -v /var/folders:/var/folders -v /Volumes/ritic/users:/Volumes/ritic/users
 
 # Set the sysctl inside the VM and apply it immediately
-podman machine ssh "echo 'net.ipv4.ip_unprivileged_port_start=80' \
+podman machine ssh "echo 'net.ipv4.ip_unprivileged_port_start=53' \
   | sudo tee /etc/sysctl.d/99-unprivileged-ports.conf >/dev/null && sudo sysctl --system"
 ```
 

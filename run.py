@@ -114,7 +114,7 @@ def start_reverse_proxy():
     start_command.extend(['--rm'])
     start_command.extend(['--name', 'darp-reverse-proxy'])
     start_command.extend(['-p', '80:80'])
-    start_command.extend(['-v', f'{DARP_ROOT}vhost_local.conf:/etc/nginx/conf.d/vhost_local.conf' ])
+    start_command.extend(['-v', f'{DARP_ROOT}vhost_local.conf:/etc/nginx/conf.d/vhost_container.conf' ])
     start_command.extend(['nginx'])
 
     print(f'starting {Fore.GREEN}darp-reverse-proxy{Style.RESET_ALL}\n')

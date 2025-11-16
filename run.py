@@ -371,10 +371,11 @@ if subdomains is not None and len(subdomains) > 0:
 parser = argparse.ArgumentParser(
     prog=f'{Fore.GREEN}darp{Style.RESET_ALL}',
     description=f'Your {Fore.LIGHTMAGENTA_EX}d{Style.RESET_ALL}irectories {Fore.LIGHTMAGENTA_EX}a{Style.RESET_ALL}uto-{Fore.LIGHTMAGENTA_EX}r{Style.RESET_ALL}everse {Fore.LIGHTMAGENTA_EX}p{Style.RESET_ALL}roxied.',
-    epilog='For any questions, please attend the Arcodetype livestream (when it\'s on!)'
+    epilog='For any questions, please attend the Arcodetype livestream (when it\'s on!)',
+    usage=argparse.SUPPRESS
 )
 
-subparsers = parser.add_subparsers(dest='command', help='subcommand help')
+subparsers = parser.add_subparsers(dest='command')
 
 # darp deploy
 deploy_style = Style.NORMAL if domain_is_set and subdomain_is_set else Style.DIM
@@ -404,36 +405,36 @@ if len(shell_help_reqs) > 0:
         shell_help_text += f" '{Fore.BLUE + action + Style.RESET_ALL}'"
     shell_help_text += ' )'
 
-parser_deploy = subparsers.add_parser(f'deploy', help=deploy_help_text)
+parser_deploy = subparsers.add_parser(f'deploy', help=deploy_help_text, usage=argparse.SUPPRESS)
 parser_deploy.set_defaults(func=run_deploy)
 
 # darp shell
-parser_shell = subparsers.add_parser('shell', help=shell_help_text)
+parser_shell = subparsers.add_parser('shell', help=shell_help_text, usage=argparse.SUPPRESS)
 parser_shell.add_argument('environment', help='The name of the environment to start the shell in')
 parser_shell.add_argument('container_image', help='The container image from which to create the shell instance')
 parser_shell.set_defaults(func=run_shell)
 
 # darp set
-parser_set = subparsers.add_parser('set', help='set config value')
+parser_set = subparsers.add_parser('set', help='set config value', usage=argparse.SUPPRESS)
 subparser_set = parser_set.add_subparsers(dest='set_command', help='set any of the following in the config')
 
 # darp set domain
-parser_set_domain = subparser_set.add_parser('domain', help='set domain')
+parser_set_domain = subparser_set.add_parser('domain', help='set domain', usage=argparse.SUPPRESS)
 parser_set_domain.add_argument('name', help='the name of the domain')
 parser_set_domain.set_defaults(func=run_set_domain)
 
 # darp set DARP_ROOT
-parser_set_darp_root = subparser_set.add_parser('DARP_ROOT', help=f"set DARP_ROOT (current: {DARP_ROOT})")
+parser_set_darp_root = subparser_set.add_parser('DARP_ROOT', help=f"set DARP_ROOT (current: {DARP_ROOT})", usage=argparse.SUPPRESS)
 parser_set_darp_root.add_argument('NEW_DARP_ROOT', help=f"the new directory for contents of .container_development (current: {DARP_ROOT})")
 parser_set_darp_root.add_argument('-z', '--zhrc', help='the location of the .zshrc file', required=False)
 parser_set_darp_root.set_defaults(func=run_set_darp_root)
 
 # darp add
-parser_add = subparsers.add_parser('add', help='add to config')
+parser_add = subparsers.add_parser('add', help='add to config', usage=argparse.SUPPRESS)
 subparser_add = parser_add.add_subparsers(dest='add_command', help='add any of the following to the config')
 
 # darp add port_override
-parser_add_portmap = subparser_add.add_parser('portmap', help='add port mapping to a service')
+parser_add_portmap = subparser_add.add_parser('portmap', help='add port mapping to a service', usage=argparse.SUPPRESS)
 parser_add_portmap.add_argument('subdomain_name', help='the name of the subdomain')
 parser_add_portmap.add_argument('service_name', help='the name of the service')
 parser_add_portmap.add_argument('host_port', type=str, help='the host port')
@@ -441,17 +442,17 @@ parser_add_portmap.add_argument('container_port', type=str, help='the container 
 parser_add_portmap.set_defaults(func=run_add_portmap)
 
 # darp add subdomain
-parser_add_subdomain = subparser_add.add_parser('subdomain', help='add subdomain')
+parser_add_subdomain = subparser_add.add_parser('subdomain', help='add subdomain', usage=argparse.SUPPRESS)
 parser_add_subdomain.add_argument('name', help='the name of the subdomain')
 parser_add_subdomain.add_argument('location', help='the location of the subdomain')
 parser_add_subdomain.set_defaults(func=run_add_subdomain)
 
 # darp remove
-parser_remove = subparsers.add_parser('rm', help='remove from config')
+parser_remove = subparsers.add_parser('rm', help='remove from config', usage=argparse.SUPPRESS)
 subparser_remove = parser_remove.add_subparsers(dest='remove_command', help='remove any of the following from the config')
 
 # darp add port_override
-parser_remove_portmap = subparser_remove.add_parser('portmap', help='remove port mapping to a service')
+parser_remove_portmap = subparser_remove.add_parser('portmap', help='remove port mapping to a service', usage=argparse.SUPPRESS)
 parser_remove_portmap.add_argument('subdomain_name', help='the name of the subdomain')
 parser_remove_portmap.add_argument('service_name', help='the name of the service')
 parser_remove_portmap.add_argument('host_port', type=str, help='the host port')
@@ -459,7 +460,7 @@ parser_remove_portmap.add_argument('container_port (optional)', nargs='?', type=
 parser_remove_portmap.set_defaults(func=run_remove_portmap)
 
 # darp remove subdomain
-parser_remove_domain = subparser_remove.add_parser('subdomain', help='remove subdomain')
+parser_remove_domain = subparser_remove.add_parser('subdomain', help='remove subdomain', usage=argparse.SUPPRESS)
 parser_remove_domain.add_argument('name', help='the name of the subdomain')
 parser_remove_domain.add_argument('location (optional)', nargs='?', help='the location of the subdomain')
 parser_remove_domain.set_defaults(func=run_remove_subdomain)

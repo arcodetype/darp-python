@@ -309,17 +309,6 @@ def run_shell(args):
             print(f'restarting {Fore.CYAN + container_name + Style.RESET_ALL}')
             run_shell(args)
 
-def run_set_domain(args):
-    filename = f"{DARP_ROOT}config.json"
-
-    user_config = get_user_config(filename)
-    user_config['domain'] = args.name
-
-    with open(filename, 'w') as f:
-        json.dump(user_config, f, indent=4)
-
-    print(f"Domain set to  '{args.name}'")
-
 def run_set_darp_root(args):
     zshrc_path = os.path.expanduser('~/.zshrc')
     
@@ -359,8 +348,6 @@ start_reverse_proxy()
 filename = f"{DARP_ROOT}config.json"
 user_config = get_user_config(filename)
 
-domain_is_set = user_config.get('domain')
-
 subdomain_is_set = False
 subdomains = user_config.get('subdomains')
 if subdomains is not None and len(subdomains) > 0:
@@ -378,14 +365,11 @@ parser = argparse.ArgumentParser(
 subparsers = parser.add_subparsers(dest='command')
 
 # darp deploy
-deploy_style = Style.NORMAL if domain_is_set and subdomain_is_set else Style.DIM
+deploy_style = Style.NORMAL if subdomain_is_set else Style.DIM
 deploy_help_text = 'deploys the environment'
 deploy_help_reqs = []
 shell_help_text = 'starts a shell instance'
 shell_help_reqs = []
-
-if not domain_is_set:
-    deploy_help_reqs.append('set domain')
 
 if not subdomain_is_set:
     deploy_help_reqs.append('add subdomain')
@@ -417,11 +401,6 @@ parser_shell.set_defaults(func=run_shell)
 # darp set
 parser_set = subparsers.add_parser('set', help='set config value', usage=argparse.SUPPRESS)
 subparser_set = parser_set.add_subparsers(dest='set_command', help='set any of the following in the config')
-
-# darp set domain
-parser_set_domain = subparser_set.add_parser('domain', help='set domain', usage=argparse.SUPPRESS)
-parser_set_domain.add_argument('name', help='the name of the domain')
-parser_set_domain.set_defaults(func=run_set_domain)
 
 # darp set DARP_ROOT
 parser_set_darp_root = subparser_set.add_parser('DARP_ROOT', help=f"set DARP_ROOT (current: {DARP_ROOT})", usage=argparse.SUPPRESS)
@@ -460,10 +439,10 @@ parser_remove_portmap.add_argument('container_port (optional)', nargs='?', type=
 parser_remove_portmap.set_defaults(func=run_remove_portmap)
 
 # darp remove subdomain
-parser_remove_domain = subparser_remove.add_parser('subdomain', help='remove subdomain', usage=argparse.SUPPRESS)
-parser_remove_domain.add_argument('name', help='the name of the subdomain')
-parser_remove_domain.add_argument('location (optional)', nargs='?', help='the location of the subdomain')
-parser_remove_domain.set_defaults(func=run_remove_subdomain)
+parser_remove_subdomain = subparser_remove.add_parser('subdomain', help='remove subdomain', usage=argparse.SUPPRESS)
+parser_remove_subdomain.add_argument('name', help='the name of the subdomain')
+parser_remove_subdomain.add_argument('location (optional)', nargs='?', help='the location of the subdomain')
+parser_remove_subdomain.set_defaults(func=run_remove_subdomain)
 
 if len(sys.argv) == 1:
     parser.print_help()

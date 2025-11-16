@@ -114,10 +114,32 @@ def start_reverse_proxy():
     start_command.extend(['--rm'])
     start_command.extend(['--name', 'darp-reverse-proxy'])
     start_command.extend(['-p', '80:80'])
-    start_command.extend(['-v', f'{DARP_ROOT}/vhost_local.conf:/etc/nginx/conf.d/vhost_local.conf' ])
+    start_command.extend(['-v', f'{DARP_ROOT}vhost_local.conf:/etc/nginx/conf.d/vhost_local.conf' ])
     start_command.extend(['nginx'])
 
     print(f'starting {Fore.GREEN}darp-reverse-proxy{Style.RESET_ALL}\n')
+
+    subprocess.Popen(
+        start_command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+
+def start_darp_masq():
+    if is_container_running('darp-masq'):
+        return True
+    
+    start_command = []
+    start_command.extend(['podman', 'run', '-d'])
+    start_command.extend(['--rm'])
+    start_command.extend(['--name', 'darp-masq'])
+    start_command.extend(['-p', '53:53/udp'])
+    start_command.extend(['-p', '53:53/tcp'])
+    start_command.extend(['-v', f'{DARP_ROOT}dnsmasq.d:/etc/dnsmasq.d' ])
+    start_command.extend(['--cap-add=NET_ADMIN'])
+    start_command.extend(['dockurr/dnsmasq'])
+
+    print(f'starting {Fore.GREEN}darp-masq{Style.RESET_ALL}\n')
 
     subprocess.Popen(
         start_command,
@@ -158,16 +180,11 @@ def run_init(args):
     )
     print(f'\n{Fore.GREEN}/etc/resolver/test{Style.RESET_ALL} created')
 
-    with open(f'{DARP_ROOT}dnsmasq.conf', 'w') as file:
+    subprocess.run(["mkdir", "-p", f'{DARP_ROOT}dnsmasq.d'], check=True)
+
+    with open(f'{DARP_ROOT}dnsmasq.d/test.conf', 'w') as file:
         lines = [
-            'listen-address=0.0.0.0\n',
-            'no-hosts\n',
-            'no-resolv\n',
             'address=/.test/127.0.0.1\n',
-            '\n',
-            '# Optional logging\n',
-            'log-queries\n',
-            'log-facility=/var/log/dnsmasq.log\n',
         ]
         file.writelines(lines)
 
@@ -380,6 +397,7 @@ if not is_unprivileged_port_start(80):
     sys.exit()
 
 start_reverse_proxy()
+start_darp_masq()
 
 # Configuration Checks
 

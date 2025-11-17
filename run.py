@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import subprocess
+import signal
 import sys
 from datetime import datetime
 
@@ -28,9 +29,52 @@ RESOLVER_FILE = "/etc/resolver/test"
 REVERSE_PROXY_CONTAINER = "darp-reverse-proxy"
 DNSMASQ_CONTAINER = "darp-masq"
 
+PSEUDO_PWD_TOKEN = "{pwd}"  # new proprietary token for "current directory"
+
 # ---------------------------------------------------------------------------
 # Helper Functions
 # ---------------------------------------------------------------------------
+
+def run_podman_interactive(podman_command, container_name: str | None = None, restart_on: set[int] | None = None):
+    """
+    Run `podman run ...` in the foreground, handle Ctrl+C and optional auto-restart.
+
+    - On Ctrl+C: wait for podman to exit; if it doesn't, `podman stop` the container.
+    - If restart_on is provided and the exit code is in that set, auto-restart.
+    """
+    if restart_on is None:
+        restart_on = set()
+
+    while True:
+        proc = subprocess.Popen(podman_command)
+
+        try:
+            rc = proc.wait()
+        except KeyboardInterrupt:
+            # Python got SIGINT, podman also did (same process group).
+            # Give it a moment to shut down gracefully; if not, stop it.
+            print(f"\nStopping {Fore.CYAN}{container_name or 'container'}{Style.RESET_ALL} (Ctrl+C)")
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                if container_name:
+                    subprocess.run(
+                        ["podman", "stop", container_name],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+            break
+
+        # Auto-restart logic
+        if rc in restart_on:
+            if container_name:
+                print(f"restarting {Fore.CYAN}{container_name}{Style.RESET_ALL}")
+            # loop back around and start a fresh `podman run`
+            continue
+
+        # Normal exit or non-restartable error
+        break
 
 
 def run_command(cmd, **kwargs):
@@ -220,6 +264,29 @@ def stop_running_darps():
         stop_running_darp(darp)
 
 
+def resolve_host_path(template: str, current_directory: str) -> str:
+    """
+    Resolve the host path template using our proprietary token and legacy $(pwd).
+    - {pwd}   -> current_directory (preferred)
+    - $(pwd)  -> current_directory (backwards-compatible)
+    """
+    return (
+        template.replace(PSEUDO_PWD_TOKEN, current_directory)
+        .replace("$(pwd)", current_directory)
+    )
+
+
+def resolve_image_name(environment: dict | None, cli_image: str) -> str:
+    """
+    Resolve the image name using environment.image_repository if set.
+    If image_repository exists, we build: "<image_repository>:<cli_image>".
+    Otherwise, we just use cli_image.
+    """
+    if environment and "image_repository" in environment:
+        return f"{environment['image_repository']}:{cli_image}"
+    return cli_image
+
+
 # ---------------------------------------------------------------------------
 # Command Line Functions
 # ---------------------------------------------------------------------------
@@ -260,20 +327,6 @@ def run_deploy(_args):
     if not domains:
         print("Please configure a domain.")
         sys.exit(1)
-
-    # backup old files if they exist
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    backup_dir = os.path.join(DARP_ROOT, f"backup_{timestamp}")
-    os.makedirs(backup_dir, exist_ok=True)
-
-    files_to_move = [
-        HOSTS_CONTAINER_PATH,
-        PORTMAP_PATH,
-        VHOST_CONTAINER_CONF,
-    ]
-    existing_files = [f for f in files_to_move if os.path.exists(f)]
-    if existing_files:
-        run_command(["mv", *existing_files, backup_dir])
 
     hosts_container_lines = []
     portmap = {}
@@ -320,9 +373,6 @@ def run_deploy(_args):
 
     with open(VHOST_CONTAINER_CONF, "w") as file:
         file.writelines(vhost_container)
-
-    # delete backup location
-    run_command(["rm", "-rf", backup_dir])
 
     restart_reverse_proxy()
     stop_running_darps()
@@ -441,7 +491,182 @@ def run_remove_domain(args):
     print(f"removed '{args.name}'")
 
 
+def run_add_volume(args):
+    """
+    darp add volume <environment> <container_dir> <host_dir>
+
+    host_dir may include the proprietary {pwd} token to be resolved at runtime.
+    """
+    user_config = get_config(CONFIG_PATH)
+    environments = user_config.get("environments") or {}
+
+    if not environments:
+        print("No environments configured. Use 'darp add domain' and update config.")
+        sys.exit(1)
+
+    env = environments.get(args.environment)
+    if env is None:
+        print(f"Environment '{args.environment}' does not exist.")
+        sys.exit(1)
+
+    volumes = env.setdefault("volumes", [])
+
+    new_volume = {
+        "container": args.container_dir,
+        "host": args.host_dir,
+    }
+
+    # Avoid duplicate volume entries
+    for v in volumes:
+        if v.get("container") == new_volume["container"] and v.get("host") == new_volume["host"]:
+            print(
+                f"Volume mapping already exists for environment '{args.environment}': "
+                f"{new_volume['host']} -> {new_volume['container']}"
+            )
+            sys.exit(1)
+
+    volumes.append(new_volume)
+
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(user_config, f, indent=4)
+
+    print(
+        f"Added volume to environment '{args.environment}': "
+        f"{new_volume['host']} -> {new_volume['container']}"
+    )
+
+
+def run_set_serve_command(args):
+    """
+    darp set serve_command <environment> <serve_command>
+    """
+    user_config = get_config(CONFIG_PATH)
+    environments = user_config.get("environments") or {}
+
+    if not environments:
+        print("No environments configured. Use 'darp add domain' and update config.")
+        sys.exit(1)
+
+    env = environments.get(args.environment)
+    if env is None:
+        print(f"Environment '{args.environment}' does not exist.")
+        sys.exit(1)
+
+    env["serve_command"] = args.serve_command
+
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(user_config, f, indent=4)
+
+    print(
+        f"Set serve_command for environment '{args.environment}' to:\n"
+        f"  {args.serve_command}"
+    )
+
+
+def run_set_image_repository(args):
+    """
+    darp set image_repository <environment> <image_repository>
+    """
+    user_config = get_config(CONFIG_PATH)
+    environments = user_config.get("environments") or {}
+
+    if not environments:
+        print("No environments configured. Use 'darp add domain' and update config.")
+        sys.exit(1)
+
+    env = environments.get(args.environment)
+    if env is None:
+        print(f"Environment '{args.environment}' does not exist.")
+        sys.exit(1)
+
+    env["image_repository"] = args.image_repository
+
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(user_config, f, indent=4)
+
+    print(
+        f"Set image_repository for environment '{args.environment}' to:\n"
+        f"  {args.image_repository}"
+    )
+
+
+def run_rm_serve_command(args):
+    """
+    darp rm serve_command <environment>
+    """
+    user_config = get_config(CONFIG_PATH)
+    environments = user_config.get("environments") or {}
+
+    # Guard: only allowed if some env has serve_command (per spec)
+    if not any(
+        isinstance(env, dict) and "serve_command" in env for env in environments.values()
+    ):
+        print("No environments with serve_command set. Use 'darp set serve_command' first.")
+        sys.exit(1)
+
+    env = environments.get(args.environment)
+    if env is None:
+        print(f"Environment '{args.environment}' does not exist.")
+        sys.exit(1)
+
+    if "serve_command" not in env:
+        print(
+            f"Environment '{args.environment}' has no custom serve_command. "
+            "Use 'darp set serve_command' first."
+        )
+        sys.exit(1)
+
+    del env["serve_command"]
+
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(user_config, f, indent=4)
+
+    print(f"Removed serve_command from environment '{args.environment}'")
+
+
+def run_rm_image_repository(args):
+    """
+    darp rm image_repository <environment>
+    """
+    user_config = get_config(CONFIG_PATH)
+    environments = user_config.get("environments") or {}
+
+    # Guard: only allowed if some env has image_repository (per spec)
+    if not any(
+        isinstance(env, dict) and "image_repository" in env for env in environments.values()
+    ):
+        print(
+            "No environments with image_repository set. "
+            "Use 'darp set image_repository' first."
+        )
+        sys.exit(1)
+
+    env = environments.get(args.environment)
+    if env is None:
+        print(f"Environment '{args.environment}' does not exist.")
+        sys.exit(1)
+
+    if "image_repository" not in env:
+        print(
+            f"Environment '{args.environment}' has no custom image_repository. "
+            "Use 'darp set image_repository' first."
+        )
+        sys.exit(1)
+
+    del env["image_repository"]
+
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(user_config, f, indent=4)
+
+    print(f"Removed image_repository from environment '{args.environment}'")
+
+
 def run_shell(args):
+    """
+    darp shell [-e ENV] <container_image>
+
+    Starts nginx inside the container (if available) and drops you into a shell.
+    """
     user_config = get_config(CONFIG_PATH)
     portmap_config = get_config(PORTMAP_PATH)
 
@@ -489,13 +714,11 @@ def run_shell(args):
     # Extra volumes from environment, if present
     if environment:
         for volume in environment.get("volumes", []):
-            host_path = volume["host"].replace("$(pwd)", current_directory)
+            host_path = resolve_host_path(volume["host"], current_directory)
             if not os.path.exists(host_path):
                 print(f"Volume, {volume['host']}, does not appear to exist.")
                 sys.exit(1)
-            podman_command.extend(
-                ["-v", f"{host_path}:{volume['container']}"]
-            )
+            podman_command.extend(["-v", f"{host_path}:{volume['container']}"])
 
     host_portmappings = get_nested(
         domain, ["services", current_directory_name, "host_portmappings"]
@@ -516,14 +739,130 @@ def run_shell(args):
         sys.exit(1)
 
     podman_command.extend(["-p", f"{rev_proxy_port}:8000"])
-    podman_command.extend([args.container_image, "sh"])
 
-    try:
-        run_command(podman_command)
-    except subprocess.CalledProcessError as e:
-        if e.returncode == 137:
-            print(f"restarting {Fore.CYAN}{container_name}{Style.RESET_ALL}")
-            run_shell(args)
+    image_name = resolve_image_name(environment, args.container_image)
+
+    # Start nginx if present, then drop into an interactive shell.
+    inner_cmd = (
+        'if command -v nginx >/dev/null 2>&1; then '
+        'echo "Starting nginx..."; nginx; '
+        'else echo "nginx not found, skipping"; fi; '
+        'echo ""; '
+        'echo "To leave this shell and stop the container, type: \033[33mexit\033[0m"; '
+        'echo ""; '
+        'cd /app; exec sh'
+    )
+
+
+
+    podman_command.extend([image_name, "sh", "-c", inner_cmd])
+
+    # Auto-restart on 137 (OOM or docker-style kill), but NOT on Ctrl+C.
+    run_podman_interactive(podman_command, container_name=container_name, restart_on={137})
+
+
+def run_serve(args):
+    """
+    darp serve -e ENV <container_image>
+
+    Starts nginx inside the container (if available) and runs the environment's serve_command.
+    """
+    user_config = get_config(CONFIG_PATH)
+    portmap_config = get_config(PORTMAP_PATH)
+
+    if not args.environment:
+        print("Environment is required for 'darp serve' (-e/--environment).")
+        sys.exit(1)
+
+    environment = get_nested(user_config, ["environments", args.environment])
+    if environment is None:
+        print(f"Environment '{args.environment}' does not exist.")
+        sys.exit(1)
+
+    serve_command = environment.get("serve_command")
+    if not serve_command:
+        print(
+            f"Environment '{args.environment}' has no serve_command. "
+            "Use 'darp set serve_command' first."
+        )
+        sys.exit(1)
+
+    current_directory = os.getcwd()
+    current_directory_name = os.path.basename(current_directory)
+
+    parent_directory = os.path.dirname(current_directory)
+    parent_directory_name = os.path.basename(parent_directory)
+
+    domain = get_nested(user_config, ["domains", parent_directory_name])
+    if domain is None:
+        print(
+            f"domain, {parent_directory_name}, does not exist in darp's "
+            f"domain configuration."
+        )
+        sys.exit(1)
+
+    container_name = f"darp_{parent_directory_name}_{current_directory_name}"
+
+    while True:
+        podman_command = [
+            "podman",
+            "run",
+            "--rm",
+            "--name",
+            container_name,
+            "-v",
+            f"{current_directory}:/app",
+            "-v",
+            f"{HOSTS_CONTAINER_PATH}:/etc/hosts",
+            "-v",
+            f"{NGINX_CONF_PATH}:/etc/nginx/nginx.conf",
+            "-v",
+            f"{VHOST_CONTAINER_CONF}:/etc/nginx/http.d/vhost_docker.conf",
+        ]
+
+        # Extra volumes from environment, if present
+        for volume in environment.get("volumes", []):
+            host_path = resolve_host_path(volume["host"], current_directory)
+            if not os.path.exists(host_path):
+                print(f"Volume, {volume['host']}, does not appear to exist.")
+                sys.exit(1)
+            podman_command.extend(["-v", f"{host_path}:{volume['container']}"])
+
+        host_portmappings = get_nested(
+            domain, ["services", current_directory_name, "host_portmappings"]
+        )
+        if host_portmappings:
+            for host_port, container_port in host_portmappings.items():
+                podman_command.extend(["-p", f"{host_port}:{container_port}"])
+
+        # Reverse proxy port
+        rev_proxy_port = get_nested(
+            portmap_config, [parent_directory_name, current_directory_name]
+        )
+        if rev_proxy_port is None:
+            print(
+                f"port not yet assigned to {current_directory_name}, "
+                f"run 'darp deploy'"
+            )
+            sys.exit(1)
+
+        podman_command.extend(["-p", f"{rev_proxy_port}:8000"])
+
+        image_name = resolve_image_name(environment, args.container_image)
+
+        inner_cmd = (
+            'if command -v nginx >/dev/null 2>&1; then '
+            'echo "Starting nginx..."; nginx; '
+            'else echo "nginx not found, skipping"; fi; '
+            f'cd /app; {serve_command}'
+        )
+
+        podman_command.extend([image_name, "sh", "-c", inner_cmd])
+
+        # For serve, you wanted to auto-restart on rc == 2 (e.g. deploy raced).
+        run_podman_interactive(podman_command, container_name=container_name, restart_on={2})
+        break
+
 
 
 def run_set_darp_root(args):
@@ -605,13 +944,31 @@ shell_help_reqs = []
 urls_help_text = "list out your darps"
 urls_help_reqs = []
 
+serve_help_text = "runs the environment serve_command"
+serve_help_reqs = []
+
+add_volume_help_text = "add volume to an environment"
+add_volume_help_reqs = []
+
+set_serve_help_text = "set serve_command on an environment"
+set_serve_help_reqs = []
+
+set_image_repo_help_text = "set image_repository on an environment"
+set_image_repo_help_reqs = []
+
+rm_serve_help_text = "remove serve_command from an environment"
+rm_serve_help_reqs = []
+
+rm_image_repo_help_text = "remove image_repository from an environment"
+rm_image_repo_help_reqs = []
+
 domains = user_config.get("domains")
 shell_needs_deploy = True
 
 if domains:
     portmap_config_for_shell = get_config(PORTMAP_PATH)
-    for _, domain in portmap_config_for_shell.items():
-        if domain:
+    for _, d in portmap_config_for_shell.items():
+        if d:
             shell_needs_deploy = False
             break
 else:
@@ -629,6 +986,38 @@ else:
     deploy_help_reqs.append("init")
     shell_help_reqs.append("init")
     urls_help_reqs.append("init")
+    serve_help_reqs.append("init")
+
+# Environment-related help dependencies
+environments = user_config.get("environments") or {}
+has_environments = bool(environments)
+
+any_env_has_serve_command = any(
+    isinstance(env, dict) and "serve_command" in env for env in environments.values()
+)
+any_env_has_image_repo = any(
+    isinstance(env, dict) and "image_repository" in env for env in environments.values()
+)
+
+# For commands that require environments at all
+if not has_environments:
+    # Per your spec: show ( 'add domain' ) when there are no environments
+    add_volume_help_reqs.append("add domain")
+    set_serve_help_reqs.append("add domain")
+    set_image_repo_help_reqs.append("add domain")
+    serve_help_reqs.append("add domain")
+
+# serve requires serve_command to be set on at least one env
+if not any_env_has_serve_command:
+    serve_help_reqs.append("set serve_command")
+
+# rm serve_command requires someone to have it
+if not any_env_has_serve_command:
+    rm_serve_help_reqs.append("set serve_command")
+
+# rm image_repository requires someone to have it
+if not any_env_has_image_repo:
+    rm_image_repo_help_reqs.append("set image_repository")
 
 
 def decorate_help(text, requirements):
@@ -647,6 +1036,12 @@ init_help_text = decorate_help(init_help_text, init_help_reqs)
 deploy_help_text = decorate_help(deploy_help_text, deploy_help_reqs)
 shell_help_text = decorate_help(shell_help_text, shell_help_reqs)
 urls_help_text = decorate_help(urls_help_text, urls_help_reqs)
+serve_help_text = decorate_help(serve_help_text, serve_help_reqs)
+add_volume_help_text = decorate_help(add_volume_help_text, add_volume_help_reqs)
+set_serve_help_text = decorate_help(set_serve_help_text, set_serve_help_reqs)
+set_image_repo_help_text = decorate_help(set_image_repo_help_text, set_image_repo_help_reqs)
+rm_serve_help_text = decorate_help(rm_serve_help_text, rm_serve_help_reqs)
+rm_image_repo_help_text = decorate_help(rm_image_repo_help_text, rm_image_repo_help_reqs)
 
 # ---------------------------------------------------------------------------
 # Argument Parsing
@@ -691,6 +1086,21 @@ parser_shell.add_argument(
 )
 parser_shell.set_defaults(func=run_shell)
 
+# darp serve
+parser_serve = subparsers.add_parser(
+    "serve", help=serve_help_text, usage=argparse.SUPPRESS
+)
+parser_serve.add_argument(
+    "-e",
+    "--environment",
+    help="The name of the environment whose serve_command to run",
+    required=True,
+)
+parser_serve.add_argument(
+    "container_image", help="The container image from which to run the serve_command"
+)
+parser_serve.set_defaults(func=run_serve)
+
 # darp set
 parser_set = subparsers.add_parser("set", help="set config value", usage=argparse.SUPPRESS)
 subparser_set = parser_set.add_subparsers(
@@ -714,6 +1124,27 @@ parser_set_darp_root.add_argument(
 )
 parser_set_darp_root.set_defaults(func=run_set_darp_root)
 
+# darp set serve_command
+parser_set_serve = subparser_set.add_parser(
+    "serve_command", help=set_serve_help_text, usage=argparse.SUPPRESS
+)
+parser_set_serve.add_argument("environment", help="the name of the environment")
+parser_set_serve.add_argument(
+    "serve_command", help="the command to run inside the container for this environment"
+)
+parser_set_serve.set_defaults(func=run_set_serve_command)
+
+# darp set image_repository
+parser_set_image_repo = subparser_set.add_parser(
+    "image_repository", help=set_image_repo_help_text, usage=argparse.SUPPRESS
+)
+parser_set_image_repo.add_argument("environment", help="the name of the environment")
+parser_set_image_repo.add_argument(
+    "image_repository",
+    help="base image repository (e.g. git.company.org:4567/path/to/image)",
+)
+parser_set_image_repo.set_defaults(func=run_set_image_repository)
+
 # darp add
 parser_add = subparsers.add_parser("add", help="add to config", usage=argparse.SUPPRESS)
 subparser_add = parser_add.add_subparsers(
@@ -735,6 +1166,23 @@ parser_add_domain = subparser_add.add_parser(
 parser_add_domain.add_argument("name", help="the name of the domain")
 parser_add_domain.add_argument("location", help="the location of the domain")
 parser_add_domain.set_defaults(func=run_add_domain)
+
+# darp add volume
+parser_add_volume = subparser_add.add_parser(
+    "volume", help=add_volume_help_text, usage=argparse.SUPPRESS
+)
+parser_add_volume.add_argument("environment", help="the name of the environment")
+parser_add_volume.add_argument(
+    "container_dir", help="the container directory mount path"
+)
+parser_add_volume.add_argument(
+    "host_dir",
+    help=(
+        f"the host directory (may include {PSEUDO_PWD_TOKEN} as the current-directory "
+        "placeholder)"
+    ),
+)
+parser_add_volume.set_defaults(func=run_add_volume)
 
 # darp remove
 parser_remove = subparsers.add_parser(
@@ -768,6 +1216,20 @@ parser_remove_domain.add_argument(
     help="(optional) the location of the domain (ignored)",
 )
 parser_remove_domain.set_defaults(func=run_remove_domain)
+
+# darp rm serve_command
+parser_rm_serve = subparser_remove.add_parser(
+    "serve_command", help=rm_serve_help_text, usage=argparse.SUPPRESS
+)
+parser_rm_serve.add_argument("environment", help="the name of the environment")
+parser_rm_serve.set_defaults(func=run_rm_serve_command)
+
+# darp rm image_repository
+parser_rm_image_repo = subparser_remove.add_parser(
+    "image_repository", help=rm_image_repo_help_text, usage=argparse.SUPPRESS
+)
+parser_rm_image_repo.add_argument("environment", help="the name of the environment")
+parser_rm_image_repo.set_defaults(func=run_rm_image_repository)
 
 # darp urls
 parser_urls = subparsers.add_parser(

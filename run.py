@@ -22,7 +22,7 @@ def get_nested(d, keys):
             return d
     return d
 
-def get_user_config(filename):
+def get_config(filename):
     if not os.path.exists(filename):
         with open(filename, 'w') as f:
             json.dump({}, f, indent=4)
@@ -115,7 +115,7 @@ def start_reverse_proxy():
     start_command.extend(['--rm'])
     start_command.extend(['--name', 'darp-reverse-proxy'])
     start_command.extend(['-p', '80:80'])
-    start_command.extend(['-v', f'{DARP_ROOT}vhost_local.conf:/etc/nginx/conf.d/vhost_container.conf' ])
+    start_command.extend(['-v', f'{DARP_ROOT}vhost_container.conf:/etc/nginx/conf.d/vhost_container.conf' ])
     start_command.extend(['nginx'])
 
     print(f'starting {Fore.GREEN}darp-reverse-proxy{Style.RESET_ALL}\n')
@@ -199,7 +199,7 @@ def run_deploy(args):
     print('Deploying Container Development\n')
 
     filename = f"{DARP_ROOT}config.json"
-    user_config = get_user_config(filename)
+    user_config = get_config(filename)
 
     domains = user_config.get('domains')
     if domains is None:
@@ -263,7 +263,7 @@ def run_deploy(args):
 def run_add_portmap(args):
     filename = f"{DARP_ROOT}config.json"
 
-    user_config = get_user_config(filename)
+    user_config = get_config(filename)
 
     existing_host_portmapping = get_nested(user_config, [
         'domains',
@@ -314,7 +314,7 @@ def run_add_portmap(args):
 def run_remove_portmap(args):
     filename = f"{DARP_ROOT}config.json"
 
-    user_config = get_user_config(filename)
+    user_config = get_config(filename)
 
     existing_host_portmapping = get_nested(user_config, [
         'domains',
@@ -338,7 +338,7 @@ def run_remove_portmap(args):
 def run_add_domain(args):
     filename = f"{DARP_ROOT}config.json"
 
-    user_config = get_user_config(filename)
+    user_config = get_config(filename)
 
     existing_domain = get_nested(user_config, ['domains', args.name])
     if existing_domain is not None:
@@ -362,7 +362,7 @@ def run_add_domain(args):
 def run_remove_domain(args):
     filename = f"{DARP_ROOT}config.json"
 
-    user_config = get_user_config(filename)
+    user_config = get_config(filename)
 
     existing_domain = get_nested(user_config, ['domains', args.name])
     if existing_domain is None:
@@ -378,8 +378,11 @@ def run_remove_domain(args):
         
 def run_shell(args):
     filename = f"{DARP_ROOT}config.json"
+    portmap_filename = f"{DARP_ROOT}portmap.json"
 
-    user_config = get_user_config(filename)
+    user_config = get_config(filename)
+    portmap_config = get_config(portmap_filename)
+
     environment = get_nested(user_config, ['environments', args.environment])
 
     if environment is None:
@@ -406,7 +409,11 @@ def run_shell(args):
     podman_command.extend(["--rm", "-it"])
     podman_command.extend(['--name', container_name])
     podman_command.extend(['-v', f"{current_directory}:/app"])
+    podman_command.extend(['-v', f'{DARP_ROOT}hosts_container:/etc/hosts'])
+    podman_command.extend(['-v', f'{DARP_ROOT}nginx.conf:/etc/nginx/nginx.conf'])
+    podman_command.extend(['-v', f'{DARP_ROOT}vhost_container.conf:/etc/nginx/http.d/vhost_docker.conf'])
 
+    # Extra
     for volume in environment.get('volumes', []):
         if not os.path.exists(volume['host'].replace("$(pwd)", current_directory)):
             print(f"Volume, {volume['host']}, does not appear to exist.")
@@ -418,6 +425,13 @@ def run_shell(args):
         for host_port, container_port in host_portmappings.items():
             podman_command.extend(['-p', f"{host_port}:{container_port}"])
 
+    # Standard
+    rev_proxy_port = get_nested(portmap_config, [parent_directory_name, current_directory_name])
+    if rev_proxy_port is None:
+        print(f'port not yet assigned to {current_directory_name}, run \'darp deploy\'')
+        sys.exit()
+    
+    podman_command.extend(['-p', f'{rev_proxy_port}:8000'])
     podman_command.extend([args.container_image, 'sh'])
 
     # Inherits your terminal's stdin/stdout/stderr and TTY.
@@ -466,7 +480,7 @@ start_darp_masq()
 # Configuration Checks
 
 filename = f"{DARP_ROOT}config.json"
-user_config = get_user_config(filename)
+user_config = get_config(filename)
 
 domain_is_set = False
 domains = user_config.get('domains')

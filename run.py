@@ -445,10 +445,13 @@ def run_shell(args):
     user_config = get_config(CONFIG_PATH)
     portmap_config = get_config(PORTMAP_PATH)
 
-    environment = get_nested(user_config, ["environments", args.environment])
-    if environment is None:
-        print("Environment does not exist.")
-        sys.exit(1)
+    # Optional environment
+    environment = None
+    if args.environment:
+        environment = get_nested(user_config, ["environments", args.environment])
+        if environment is None:
+            print(f"Environment '{args.environment}' does not exist.")
+            sys.exit(1)
 
     current_directory = os.getcwd()
     current_directory_name = os.path.basename(current_directory)
@@ -483,15 +486,16 @@ def run_shell(args):
         f"{VHOST_CONTAINER_CONF}:/etc/nginx/http.d/vhost_docker.conf",
     ]
 
-    # Extra volumes
-    for volume in environment.get("volumes", []):
-        host_path = volume["host"].replace("$(pwd)", current_directory)
-        if not os.path.exists(host_path):
-            print(f"Volume, {volume['host']}, does not appear to exist.")
-            sys.exit(1)
-        podman_command.extend(
-            ["-v", f"{host_path}:{volume['container']}"]
-        )
+    # Extra volumes from environment, if present
+    if environment:
+        for volume in environment.get("volumes", []):
+            host_path = volume["host"].replace("$(pwd)", current_directory)
+            if not os.path.exists(host_path):
+                print(f"Volume, {volume['host']}, does not appear to exist.")
+                sys.exit(1)
+            podman_command.extend(
+                ["-v", f"{host_path}:{volume['container']}"]
+            )
 
     host_portmappings = get_nested(
         domain, ["services", current_directory_name, "host_portmappings"]
@@ -677,7 +681,10 @@ parser_shell = subparsers.add_parser(
     "shell", help=shell_help_text, usage=argparse.SUPPRESS
 )
 parser_shell.add_argument(
-    "environment", help="The name of the environment to start the shell in"
+    "-e",
+    "--environment",
+    help="The name of the environment to start the shell in",
+    required=False,
 )
 parser_shell.add_argument(
     "container_image", help="The container image from which to create the shell instance"

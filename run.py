@@ -17,6 +17,7 @@ init()
 HOME_DIRECTORY = os.path.expanduser("~")
 DARP_ROOT_ENV = os.environ.get("DARP_ROOT", f"{HOME_DIRECTORY}/.darp")
 DARP_ROOT = os.path.join(DARP_ROOT_ENV, "")
+PODMAN_MACHINE_ENV = os.environ.get("PODMAN_MACHINE", 'podman-machine-default')
 
 CONFIG_PATH = os.path.join(DARP_ROOT, "config.json")
 PORTMAP_PATH = os.path.join(DARP_ROOT, "portmap.json")
@@ -136,29 +137,64 @@ def is_init_initialized():
 
 
 def is_podman_running():
-    """Check if podman machine is running."""
+    """
+    Check if the relevant podman machine is running.
+
+    - If PODMAN_MACHINE is set, ensure *that* machine has Running == true.
+    - Otherwise, return True if *any* machine is Running == true.
+    """
     try:
         output = run_command_capture(
-            ["podman", "machine", "list", "--format", "{{.LastUp}}"]
+            ["podman", "machine", "list", "--format", "{{.Name}} {{.Running}}"]
         )
-        running_machines = output.strip().splitlines()
-        return "Currently running" in running_machines
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        if not lines:
+            return False
+
+        if PODMAN_MACHINE_ENV:
+            # look for the specific machine
+            for line in lines:
+                parts = line.split(maxsplit=1)
+                if len(parts) != 2:
+                    continue
+                raw_name, running = parts
+                # strip trailing '*' that marks the active machine
+                name = raw_name.rstrip("*")
+
+                if name == PODMAN_MACHINE_ENV:
+                    return running.lower() == "true"
+            # machine name not found in list
+            return False
+
+        # otherwise, any running machine is fine
+        for line in lines:
+            parts = line.split(maxsplit=1)
+            if len(parts) != 2:
+                continue
+            _, running = parts
+            if running.lower() == "true":
+                return True
+
+        return False
     except Exception:
         return False
 
 
+
 def is_unprivileged_port_start(expected_port):
-    """Check that net.ipv4.ip_unprivileged_port_start <= expected_port."""
+    """
+    Check that net.ipv4.ip_unprivileged_port_start <= expected_port
+    on the target machine.
+    """
     try:
-        result = run_command_capture(
-            [
-                "podman",
-                "machine",
-                "ssh",
-                "sysctl",
-                "net.ipv4.ip_unprivileged_port_start",
-            ]
-        )
+        cmd = ["podman", "machine", "ssh"]
+        # If PODMAN_MACHINE is set, explicitly target it
+        if PODMAN_MACHINE_ENV:
+            cmd.append(PODMAN_MACHINE_ENV)
+        # command to run inside the VM
+        cmd.extend(["sysctl", "net.ipv4.ip_unprivileged_port_start"])
+
+        result = run_command_capture(cmd)
         _, value = result.strip().split("=")
         actual_port = int(value.strip())
         return actual_port <= expected_port
@@ -295,10 +331,10 @@ def resolve_image_name(environment: dict | None, cli_image: str) -> str:
 def run_init(_args):
     print("Running initialization")
 
-    # Create the resolver directory
+    # Create the resolver directory on the host
     run_command(["sudo", "mkdir", "-p", "/etc/resolver"])
 
-    # Write the resolver file
+    # Write the resolver file on the host
     run_command(
         ["sudo", "tee", RESOLVER_FILE],
         input="nameserver 127.0.0.1\n",
@@ -316,6 +352,46 @@ def run_init(_args):
         file.write("address=/.test/127.0.0.1\n")
 
     print(f"{Fore.GREEN}{test_conf_path}{Style.RESET_ALL} created")
+
+    # ------------------------------------------------------------------
+    # NEW: Configure unprivileged port start inside the Podman machine
+    # ------------------------------------------------------------------
+    ssh_cmd = ["podman", "machine", "ssh"]
+    if PODMAN_MACHINE_ENV:
+        ssh_cmd.append(PODMAN_MACHINE_ENV)
+
+    ssh_cmd.extend([
+        "sh",
+        "-c",
+        (
+            "echo 'net.ipv4.ip_unprivileged_port_start=53' "
+            "| sudo tee /etc/sysctl.d/99-unprivileged-ports.conf >/dev/null "
+            "&& sudo sysctl --system"
+        ),
+    ])
+
+    print(
+        f"Configuring unprivileged ports in podman machine "
+        f"{Fore.GREEN}{PODMAN_MACHINE_ENV}{Style.RESET_ALL}..."
+    )
+
+    try:
+        run_command(ssh_cmd)
+        print(
+            f"{Fore.GREEN}net.ipv4.ip_unprivileged_port_start=53{Style.RESET_ALL} "
+            "set inside podman machine."
+        )
+    except subprocess.CalledProcessError as e:
+        print(
+            f"{Fore.RED}Warning:{Style.RESET_ALL} failed to configure "
+            "unprivileged port 53 inside podman machine.\n"
+            "You may need to run this manually:\n\n"
+            "  podman machine ssh "
+            f"{PODMAN_MACHINE_ENV} "
+            "'echo net.ipv4.ip_unprivileged_port_start=53 | sudo tee "
+            "/etc/sysctl.d/99-unprivileged-ports.conf >/dev/null && "
+            "sudo sysctl --system'\n"
+        )
 
 
 def run_deploy(_args):
@@ -875,6 +951,7 @@ def run_set_darp_root(args):
     with open(zshrc_path, "r") as file:
         lines = file.readlines()
 
+    # Remove any existing DARP_ROOT export
     lines = [line for line in lines if not line.startswith("export DARP_ROOT=")]
 
     while lines and lines[-1].strip() == "":
@@ -888,6 +965,98 @@ def run_set_darp_root(args):
     print(
         f"DARP_ROOT set to '{args.NEW_DARP_ROOT}' in {zshrc_path}. "
         "Restart your shell or run 'source ~/.zshrc' to apply."
+    )
+
+
+def run_set_podman_machine(args):
+    """
+    darp set PODMAN_MACHINE <machine_name>
+
+    Writes `export PODMAN_MACHINE="<machine_name>"` into the user's shell config.
+    """
+    zshrc_path = os.path.expanduser(args.zhrc or "~/.zshrc")
+
+    if not os.path.exists(zshrc_path):
+        print(f"{zshrc_path} does not exist; creating it.")
+        open(zshrc_path, "a").close()
+
+    with open(zshrc_path, "r") as file:
+        lines = file.readlines()
+
+    # Remove any existing PODMAN_MACHINE export
+    lines = [line for line in lines if not line.startswith("export PODMAN_MACHINE=")]
+
+    while lines and lines[-1].strip() == "":
+        lines.pop()
+
+    lines.append(f'\nexport PODMAN_MACHINE="{args.NEW_PODMAN_MACHINE}"\n')
+
+    with open(zshrc_path, "w") as file:
+        file.writelines(lines)
+
+    print(
+        f"PODMAN_MACHINE set to '{args.NEW_PODMAN_MACHINE}' in {zshrc_path}. "
+        f"Restart your shell or run 'source {zshrc_path}' to apply."
+    )
+
+
+def run_rm_darp_root(args):
+    """
+    darp rm DARP_ROOT [-z PATH]
+
+    Remove the DARP_ROOT export from the shell config.
+    """
+    zshrc_path = os.path.expanduser(args.zhrc or "~/.zshrc")
+
+    if not os.path.exists(zshrc_path):
+        print(f"{zshrc_path} does not exist.")
+        sys.exit(1)
+
+    with open(zshrc_path, "r") as file:
+        lines = file.readlines()
+
+    new_lines = [line for line in lines if not line.startswith("export DARP_ROOT=")]
+
+    if len(new_lines) == len(lines):
+        print(f"No DARP_ROOT entry found in {zshrc_path}.")
+        return
+
+    with open(zshrc_path, "w") as file:
+        file.writelines(new_lines)
+
+    print(
+        f"Removed DARP_ROOT from {zshrc_path}. "
+        f"Restart your shell or run 'source {zshrc_path}' to apply."
+    )
+
+
+def run_rm_podman_machine(args):
+    """
+    darp rm PODMAN_MACHINE [-z PATH]
+
+    Remove the PODMAN_MACHINE export from the shell config.
+    """
+    zshrc_path = os.path.expanduser(args.zhrc or "~/.zshrc")
+
+    if not os.path.exists(zshrc_path):
+        print(f"{zshrc_path} does not exist.")
+        sys.exit(1)
+
+    with open(zshrc_path, "r") as file:
+        lines = file.readlines()
+
+    new_lines = [line for line in lines if not line.startswith("export PODMAN_MACHINE=")]
+
+    if len(new_lines) == len(lines):
+        print(f"No PODMAN_MACHINE entry found in {zshrc_path}.")
+        return
+
+    with open(zshrc_path, "w") as file:
+        file.writelines(new_lines)
+
+    print(
+        f"Removed PODMAN_MACHINE from {zshrc_path}. "
+        f"Restart your shell or run 'source {zshrc_path}' to apply."
     )
 
 
@@ -910,16 +1079,20 @@ def run_urls(_args):
 # ---------------------------------------------------------------------------
 
 if not is_podman_running():
-    print(
-        "podman-machine-default is currently down "
-        f"{Fore.RED}(podman machine start){Style.RESET_ALL}"
-    )
+    if PODMAN_MACHINE_ENV:
+        machine_msg = f"Podman machine '{PODMAN_MACHINE_ENV}' appears to be down"
+        hint = f"podman machine start {PODMAN_MACHINE_ENV}"
+    else:
+        machine_msg = "No podman machine appears to be running"
+        hint = "podman machine start"
+
+    print(f"{machine_msg} {Fore.RED}({hint}){Style.RESET_ALL}")
     sys.exit(1)
 
 if not is_unprivileged_port_start(53):
     print(
-        "podman-machine-default is set with port 53 privileged "
-        f"{Fore.RED}(see readme.md){Style.RESET_ALL}"
+        f"Podman machine '{PODMAN_MACHINE_ENV}' has port 53 privileged "
+        f"{Fore.RED}(run 'darp init' or see readme.md){Style.RESET_ALL}"
     )
     sys.exit(1)
 
@@ -1124,6 +1297,24 @@ parser_set_darp_root.add_argument(
 )
 parser_set_darp_root.set_defaults(func=run_set_darp_root)
 
+# darp set podman_machine
+parser_set_podman_machine = subparser_set.add_parser(
+    "PODMAN_MACHINE",
+    help=(
+        "set PODMAN_MACHINE "
+        f"(current: {Fore.GREEN}{PODMAN_MACHINE_ENV or 'not set'}{Style.RESET_ALL})"
+    ),
+    usage=argparse.SUPPRESS,
+)
+parser_set_podman_machine.add_argument(
+    "NEW_PODMAN_MACHINE",
+    help="the podman machine name to target (e.g. podman-machine-default, darp)",
+)
+parser_set_podman_machine.add_argument(
+    "-z", "--zhrc", help="the location of the .zshrc file", required=False
+)
+parser_set_podman_machine.set_defaults(func=run_set_podman_machine)
+
 # darp set serve_command
 parser_set_serve = subparser_set.add_parser(
     "serve_command", help=set_serve_help_text, usage=argparse.SUPPRESS
@@ -1230,6 +1421,24 @@ parser_rm_image_repo = subparser_remove.add_parser(
 )
 parser_rm_image_repo.add_argument("environment", help="the name of the environment")
 parser_rm_image_repo.set_defaults(func=run_rm_image_repository)
+
+# darp rm DARP_ROOT
+parser_rm_darp_root = subparser_remove.add_parser(
+    "DARP_ROOT", help="remove DARP_ROOT from shell config", usage=argparse.SUPPRESS
+)
+parser_rm_darp_root.add_argument(
+    "-z", "--zhrc", help="the location of the .zshrc file", required=False
+)
+parser_rm_darp_root.set_defaults(func=run_rm_darp_root)
+
+# darp rm PODMAN_MACHINE
+parser_rm_podman_machine = subparser_remove.add_parser(
+    "PODMAN_MACHINE", help="remove PODMAN_MACHINE from shell config", usage=argparse.SUPPRESS
+)
+parser_rm_podman_machine.add_argument(
+    "-z", "--zhrc", help="the location of the .zshrc file", required=False
+)
+parser_rm_podman_machine.set_defaults(func=run_rm_podman_machine)
 
 # darp urls
 parser_urls = subparsers.add_parser(

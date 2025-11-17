@@ -463,6 +463,18 @@ def run_set_darp_root(args):
     # Reload the .zshrc file
     subprocess.run(['zsh'], check=True)
 
+def run_urls(args):
+    portmap_filename = f"{DARP_ROOT}portmap.json"
+    portmap_config = get_config(portmap_filename)
+
+    print('')
+
+    for domain_name, domain in sorted(portmap_config.items()):
+        print(f'{Fore.GREEN}{domain_name}{Style.RESET_ALL}')
+        for folder_name, port in sorted(domain.items()):
+            print(f'  http://{Fore.BLUE}{folder_name}{Style.RESET_ALL}.{domain_name}.test ({port})')
+        print('')
+
 # Start Up
 machine_running = is_podman_running()
 
@@ -470,8 +482,8 @@ if not machine_running:
     print(f'podman-machine-default is currently down {Fore.RED}(podman machine start){Style.RESET_ALL}')
     sys.exit()
 
-if not is_unprivileged_port_start(80):
-    print(f'podman-machine-default is set with port 80 privilged {Fore.RED}(see readme.md){Style.RESET_ALL}')
+if not is_unprivileged_port_start(53):
+    print(f'podman-machine-default is set with port 53 privilged {Fore.RED}(see readme.md){Style.RESET_ALL}')
     sys.exit()
 
 start_reverse_proxy()
@@ -482,24 +494,6 @@ start_darp_masq()
 filename = f"{DARP_ROOT}config.json"
 user_config = get_config(filename)
 
-domain_is_set = False
-domains = user_config.get('domains')
-if domains is not None and len(domains) > 0:
-    domain_is_set = True
-
-
-# Command Line Interactions
-parser = argparse.ArgumentParser(
-    prog=f'{Fore.GREEN}darp{Style.RESET_ALL}',
-    description=f'Your {Fore.LIGHTMAGENTA_EX}d{Style.RESET_ALL}irectories {Fore.LIGHTMAGENTA_EX}a{Style.RESET_ALL}uto-{Fore.LIGHTMAGENTA_EX}r{Style.RESET_ALL}everse {Fore.LIGHTMAGENTA_EX}p{Style.RESET_ALL}roxied.',
-    epilog='For any questions, please attend the Arcodetype livestream (when it\'s on!)',
-    usage=argparse.SUPPRESS
-)
-
-subparsers = parser.add_subparsers(dest='command')
-
-dns_mask_test_exists = is_init_initalized()
-
 # darp init
 init_help_text = 'sudo (one time) initialization'
 init_help_reqs = []
@@ -507,12 +501,49 @@ deploy_help_text = 'deploys the environment'
 deploy_help_reqs = []
 shell_help_text = 'starts a shell instance'
 shell_help_reqs = []
+urls_help_text = 'list out your darps'
+urls_help_reqs = []
+
+domain_is_set = False
+domains = user_config.get('domains')
+shell_needs_deploy = True
+
+if domains is not None and len(domains) > 0:
+    domain_is_set = True
+
+    portmap_filename = f"{DARP_ROOT}portmap.json"
+    portmap_config = get_config(portmap_filename)
+
+    for domain_name, domain in portmap_config.items():
+        if len(domain.items()) > 0:
+            shell_needs_deploy = False
+            break
+else:
+    deploy_help_reqs.append('add domain')
+
+if shell_needs_deploy:
+    shell_help_reqs.append('deploy')
+    urls_help_reqs.append('deploy')
+# Command Line Interactions
+parser = argparse.ArgumentParser(
+    prog=f'{Fore.GREEN}darp{Style.RESET_ALL}',
+    description=f'Your {Fore.LIGHTMAGENTA_EX}d{Style.RESET_ALL}irectories {Fore.LIGHTMAGENTA_EX}a{Style.RESET_ALL}uto-{Fore.LIGHTMAGENTA_EX}r{Style.RESET_ALL}everse {Fore.LIGHTMAGENTA_EX}p{Style.RESET_ALL}roxied.',
+    epilog=f'Please enjoy.',
+    usage=argparse.SUPPRESS
+)
+
+subparsers = parser.add_subparsers(dest='command')
+
+dns_mask_test_exists = is_init_initalized()
+
+
 
 if (dns_mask_test_exists):
     init_help_reqs.append('initialized')
 else:
     deploy_help_reqs.append('init')
     shell_help_reqs.append('init')
+    urls_help_reqs.append('init')
 
 if len(init_help_reqs) > 0:
     init_help_text = Style.DIM + init_help_text + Style.RESET_ALL
@@ -521,11 +552,7 @@ if len(init_help_reqs) > 0:
         init_help_text += f" '{Fore.BLUE + action + Style.RESET_ALL}'"
     init_help_text += ' )'
 
-if not domain_is_set:
-    deploy_help_reqs.append('add domain')
-
 if len(deploy_help_reqs) > 0:
-    shell_help_reqs.append('deploy')
     deploy_help_text = Style.DIM + deploy_help_text + Style.RESET_ALL
     deploy_help_text += ' ('
     for action in deploy_help_reqs:
@@ -538,6 +565,13 @@ if len(shell_help_reqs) > 0:
     for action in shell_help_reqs:
         shell_help_text += f" '{Fore.BLUE + action + Style.RESET_ALL}'"
     shell_help_text += ' )'
+
+if len(urls_help_reqs) > 0:
+    urls_help_text = Style.DIM + urls_help_text + Style.RESET_ALL
+    urls_help_text += ' ('
+    for action in urls_help_reqs:
+        urls_help_text += f" '{Fore.BLUE + action + Style.RESET_ALL}'"
+    urls_help_text += ' )'
 
 # darp init
 parser_init = subparsers.add_parser(f'init', help=init_help_text, usage=argparse.SUPPRESS)
@@ -558,8 +592,8 @@ parser_set = subparsers.add_parser('set', help='set config value', usage=argpars
 subparser_set = parser_set.add_subparsers(dest='set_command', help='set any of the following in the config')
 
 # darp set DARP_ROOT
-parser_set_darp_root = subparser_set.add_parser('DARP_ROOT', help=f"set DARP_ROOT (current: {DARP_ROOT})", usage=argparse.SUPPRESS)
-parser_set_darp_root.add_argument('NEW_DARP_ROOT', help=f"the new directory for contents of .darp (current: {DARP_ROOT})")
+parser_set_darp_root = subparser_set.add_parser('DARP_ROOT', help=f"set DARP_ROOT (current: {Fore.GREEN}{DARP_ROOT}{Style.RESET_ALL})", usage=argparse.SUPPRESS)
+parser_set_darp_root.add_argument('NEW_DARP_ROOT', help=f"the new directory for contents of .darp (current: {Fore.GREEN}{DARP_ROOT}{Style.RESET_ALL})")
 parser_set_darp_root.add_argument('-z', '--zhrc', help='the location of the .zshrc file', required=False)
 parser_set_darp_root.set_defaults(func=run_set_darp_root)
 
@@ -598,6 +632,10 @@ parser_remove_domain = subparser_remove.add_parser('domain', help='remove domain
 parser_remove_domain.add_argument('name', help='the name of the domain')
 parser_remove_domain.add_argument('location (optional)', nargs='?', help='the location of the domain')
 parser_remove_domain.set_defaults(func=run_remove_domain)
+
+# darp urls
+parser_urls = subparsers.add_parser('urls', help=urls_help_text, usage=argparse.SUPPRESS)
+parser_urls.set_defaults(func=run_urls)
 
 if len(sys.argv) == 1:
     parser.print_help()

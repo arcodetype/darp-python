@@ -135,6 +135,26 @@ def is_init_initialized():
     except Exception:
         return False
 
+def is_machine_rootful(machine_name: str | None = None) -> bool:
+    """
+    Return True if the podman machine is configured as rootful.
+    If detection fails, default to False (treat as rootless).
+    """
+    if machine_name is None:
+        machine_name = PODMAN_MACHINE_ENV
+
+    if not machine_name:
+        return False
+
+    try:
+        output = run_command_capture(
+            ["podman", "machine", "inspect", machine_name, "--format", "{{.Rootful}}"]
+        )
+        return output.strip().lower() == "true"
+    except Exception:
+        # If anything goes wrong, fall back to rootless behavior.
+        return False
+
 
 def is_podman_running():
     """
@@ -185,21 +205,29 @@ def is_unprivileged_port_start(expected_port):
     """
     Check that net.ipv4.ip_unprivileged_port_start <= expected_port
     on the target machine.
+
+    For rootful machines, we skip this check (root can bind to privileged
+    ports anyway), and simply return True.
     """
     try:
-        cmd = ["podman", "machine", "ssh"]
-        # If PODMAN_MACHINE is set, explicitly target it
-        if PODMAN_MACHINE_ENV:
-            cmd.append(PODMAN_MACHINE_ENV)
-        # command to run inside the VM
-        cmd.extend(["sysctl", "net.ipv4.ip_unprivileged_port_start"])
+        machine_name = PODMAN_MACHINE_ENV
 
-        result = run_command_capture(cmd)
-        _, value = result.strip().split("=")
-        actual_port = int(value.strip())
+        # If the machine is rootful, we don't care about unprivileged_port_start.
+        if is_machine_rootful(machine_name):
+            return True
+
+        cmd = ["podman", "machine", "ssh"]
+        if machine_name:
+            cmd.append(machine_name)
+        # -n returns just the value, so parsing is simpler
+        cmd.extend(["sysctl", "-n", "net.ipv4.ip_unprivileged_port_start"])
+
+        result = run_command_capture(cmd).strip()
+        actual_port = int(result)
         return actual_port <= expected_port
     except Exception:
         return False
+
 
 
 def is_container_running(container_name):
@@ -354,25 +382,39 @@ def run_init(_args):
     print(f"{Fore.GREEN}{test_conf_path}{Style.RESET_ALL} created")
 
     # ------------------------------------------------------------------
-    # NEW: Configure unprivileged port start inside the Podman machine
+    # Configure unprivileged port start inside the Podman machine
     # ------------------------------------------------------------------
-    ssh_cmd = ["podman", "machine", "ssh"]
-    if PODMAN_MACHINE_ENV:
-        ssh_cmd.append(PODMAN_MACHINE_ENV)
+    machine_name = PODMAN_MACHINE_ENV
 
+    if is_machine_rootful(machine_name):
+        print(
+            f"Podman machine '{machine_name}' is {Fore.GREEN}rootful{Style.RESET_ALL}; "
+            "binding to port 53 does not require changing "
+            "net.ipv4.ip_unprivileged_port_start. Skipping sysctl configuration."
+        )
+        return
+
+    ssh_cmd = ["podman", "machine", "ssh"]
+    if machine_name:
+        ssh_cmd.append(machine_name)
+
+    # 1) Remove any existing ip_unprivileged_port_start lines from /etc/sysctl.conf
+    # 2) Append our desired value
+    # 3) Reload sysctl settings
     ssh_cmd.extend([
         "sh",
         "-c",
         (
-            "echo 'net.ipv4.ip_unprivileged_port_start=53' "
-            "| sudo tee /etc/sysctl.d/99-unprivileged-ports.conf >/dev/null "
-            "&& sudo sysctl --system"
+            "sudo sed -i '/^net\\.ipv4\\.ip_unprivileged_port_start/d' /etc/sysctl.conf; "
+            "echo 'net.ipv4.ip_unprivileged_port_start=53' | "
+            "sudo tee -a /etc/sysctl.conf >/dev/null; "
+            "sudo sysctl --system"
         ),
     ])
 
     print(
         f"Configuring unprivileged ports in podman machine "
-        f"{Fore.GREEN}{PODMAN_MACHINE_ENV}{Style.RESET_ALL}..."
+        f"{Fore.GREEN}{machine_name}{Style.RESET_ALL}..."
     )
 
     try:
@@ -381,16 +423,11 @@ def run_init(_args):
             f"{Fore.GREEN}net.ipv4.ip_unprivileged_port_start=53{Style.RESET_ALL} "
             "set inside podman machine."
         )
-    except subprocess.CalledProcessError as e:
+    except subprocess.CalledProcessError:
         print(
             f"{Fore.RED}Warning:{Style.RESET_ALL} failed to configure "
             "unprivileged port 53 inside podman machine.\n"
-            "You may need to run this manually:\n\n"
-            "  podman machine ssh "
-            f"{PODMAN_MACHINE_ENV} "
-            "'echo net.ipv4.ip_unprivileged_port_start=53 | sudo tee "
-            "/etc/sysctl.d/99-unprivileged-ports.conf >/dev/null && "
-            "sudo sysctl --system'\n"
+            "You may need to run this manually.\n"
         )
 
 
@@ -1094,7 +1131,6 @@ if not is_unprivileged_port_start(53):
         f"Podman machine '{PODMAN_MACHINE_ENV}' has port 53 privileged "
         f"{Fore.RED}(run 'darp init' or see readme.md){Style.RESET_ALL}"
     )
-    sys.exit(1)
 
 start_reverse_proxy()
 start_darp_masq()
@@ -1160,6 +1196,18 @@ else:
     shell_help_reqs.append("init")
     urls_help_reqs.append("init")
     serve_help_reqs.append("init")
+
+# Also require init if the podman machine hasn't lowered the unprivileged port yet
+if not is_unprivileged_port_start(53):
+    # Don't duplicate "init" if it's already there, but ensure it's a requirement
+    if "init" not in deploy_help_reqs:
+        deploy_help_reqs.append("init")
+    if "init" not in shell_help_reqs:
+        shell_help_reqs.append("init")
+    if "init" not in urls_help_reqs:
+        urls_help_reqs.append("init")
+    if "init" not in serve_help_reqs:
+        serve_help_reqs.append("init")
 
 # Environment-related help dependencies
 environments = user_config.get("environments") or {}

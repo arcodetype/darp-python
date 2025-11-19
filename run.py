@@ -17,7 +17,7 @@ init()
 HOME_DIRECTORY = os.path.expanduser("~")
 DARP_ROOT_ENV = os.environ.get("DARP_ROOT", f"{HOME_DIRECTORY}/.darp")
 DARP_ROOT = os.path.join(DARP_ROOT_ENV, "")
-PODMAN_MACHINE_ENV = os.environ.get("PODMAN_MACHINE", 'podman-machine-default')
+PODMAN_MACHINE_ENV = os.environ.get("PODMAN_MACHINE", "podman-machine-default")
 
 CONFIG_PATH = os.path.join(DARP_ROOT, "config.json")
 PORTMAP_PATH = os.path.join(DARP_ROOT, "portmap.json")
@@ -37,23 +37,26 @@ PSEUDO_PWD_TOKEN = "{pwd}"
 # Helper Functions
 # ---------------------------------------------------------------------------
 
-def run_podman_interactive(podman_command, container_name: str | None = None, restart_on: set[int] | None = None):
-    """
-    Run `podman run ...` in the foreground, handle Ctrl+C and optional auto-restart.
 
-    - On Ctrl+C: wait for podman to exit; if it doesn't, `podman stop` the container.
+def run_podman_interactive(
+    container_command, container_name: str | None = None, restart_on: set[int] | None = None
+):
+    """
+    Run `<engine> run ...` in the foreground, handle Ctrl+C and optional auto-restart.
+
+    - On Ctrl+C: wait for container to exit; if it doesn't, `<engine> stop` the container.
     - If restart_on is provided and the exit code is in that set, auto-restart.
     """
     if restart_on is None:
         restart_on = set()
 
     while True:
-        proc = subprocess.Popen(podman_command)
+        proc = subprocess.Popen(container_command)
 
         try:
             rc = proc.wait()
         except KeyboardInterrupt:
-            # Python got SIGINT, podman also did (same process group).
+            # Python got SIGINT, container also did (same process group).
             # Give it a moment to shut down gracefully; if not, stop it.
             print(f"\nStopping {Fore.CYAN}{container_name or 'container'}{Style.RESET_ALL} (Ctrl+C)")
             try:
@@ -61,7 +64,7 @@ def run_podman_interactive(podman_command, container_name: str | None = None, re
             except subprocess.TimeoutExpired:
                 if container_name:
                     subprocess.run(
-                        ["podman", "stop", container_name],
+                        [CONTAINER_BIN, "stop", container_name],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                         check=False,
@@ -72,7 +75,7 @@ def run_podman_interactive(podman_command, container_name: str | None = None, re
         if rc in restart_on:
             if container_name:
                 print(f"restarting {Fore.CYAN}{container_name}{Style.RESET_ALL}")
-            # loop back around and start a fresh `podman run`
+            # loop back around and start a fresh `<engine> run`
             continue
 
         # Normal exit or non-restartable error
@@ -121,7 +124,7 @@ def get_config(filename):
 def get_running_darps():
     """Return list of running darp_* containers."""
     try:
-        output = run_command_capture(["podman", "ps", "--format", "{{.Names}}"])
+        output = run_command_capture([CONTAINER_BIN, "ps", "--format", "{{.Names}}"])
         running_containers = output.strip().splitlines()
         return [name for name in running_containers if name.startswith("darp_")]
     except Exception:
@@ -158,14 +161,20 @@ def is_machine_rootful(machine_name: str | None = None) -> bool:
         return False
 
 
-def is_podman_running():
+def is_engine_ready():
     """
-    Check if the relevant podman machine is running.
+    Check if the configured container engine is ready.
 
-    - If PODMAN_MACHINE is set, ensure *that* machine has Running == true.
-    - Otherwise, return True if *any* machine is Running == true.
+    - For podman: ensure the relevant podman machine is running.
+    - For docker: ensure the daemon is reachable via `docker info`.
     """
     try:
+        if ENGINE == "docker":
+            # `docker info` exits non-zero if daemon is not reachable.
+            run_command_capture(["docker", "info"])
+            return True
+
+        # Default / podman behavior: check machines
         output = run_command_capture(
             ["podman", "machine", "list", "--format", "{{.Name}} {{.Running}}"]
         )
@@ -204,12 +213,16 @@ def is_podman_running():
 
 def is_unprivileged_port_start(expected_port):
     """
-    Check that net.ipv4.ip_unprivileged_port_start <= expected_port
+    For podman: Check that net.ipv4.ip_unprivileged_port_start <= expected_port
     on the target machine.
 
-    For rootful machines, we skip this check (root can bind to privileged
-    ports anyway), and simply return True.
+    For docker (or other engines), we skip this check and simply return True.
     """
+    if ENGINE != "podman":
+        # Docker Desktop runs as root in its own VM; host unprivileged_port_start
+        # isn't relevant in the same way.
+        return True
+
     try:
         machine_name = PODMAN_MACHINE_ENV
 
@@ -234,7 +247,7 @@ def is_container_running(container_name):
     """Check if a specific container is running."""
     try:
         output = run_command_capture(
-            ["podman", "container", "ls", "--format", "{{.Names}}"]
+            [CONTAINER_BIN, "ps", "--format", "{{.Names}}"]
         )
         running_containers = output.strip().splitlines()
         return container_name in running_containers
@@ -249,7 +262,7 @@ def start_reverse_proxy():
         return True
 
     start_command = [
-        "podman",
+        CONTAINER_BIN,
         "run",
         "-d",
         "--rm",
@@ -274,7 +287,7 @@ def restart_reverse_proxy():
     if not is_container_running(REVERSE_PROXY_CONTAINER):
         return start_reverse_proxy()
 
-    restart_command = ["podman", "restart", REVERSE_PROXY_CONTAINER]
+    restart_command = [CONTAINER_BIN, "restart", REVERSE_PROXY_CONTAINER]
 
     print(f"restarting {Fore.GREEN}{REVERSE_PROXY_CONTAINER}{Style.RESET_ALL}")
 
@@ -289,7 +302,7 @@ def start_darp_masq():
         return True
 
     start_command = [
-        "podman",
+        CONTAINER_BIN,
         "run",
         "-d",
         "--rm",
@@ -315,7 +328,7 @@ def start_darp_masq():
 def stop_running_darp(name):
     """Stop a single darp_* container."""
     print(f"stopping {Fore.CYAN}{name}{Style.RESET_ALL}")
-    stop_command = ["podman", "stop", name]
+    stop_command = [CONTAINER_BIN, "stop", name]
 
     subprocess.Popen(
         stop_command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
@@ -493,6 +506,13 @@ def run_init(_args):
     # ------------------------------------------------------------------
     # Configure unprivileged port start inside the Podman machine
     # ------------------------------------------------------------------
+    if ENGINE != "podman":
+        print(
+            f"Engine is {Fore.GREEN}{ENGINE}{Style.RESET_ALL}; "
+            "skipping podman machine sysctl configuration."
+        )
+        return
+
     machine_name = PODMAN_MACHINE_ENV
 
     if is_machine_rootful(machine_name):
@@ -510,16 +530,18 @@ def run_init(_args):
     # 1) Remove any existing ip_unprivileged_port_start lines from /etc/sysctl.conf
     # 2) Append our desired value
     # 3) Reload sysctl settings
-    ssh_cmd.extend([
-        "sh",
-        "-c",
-        (
-            "sudo sed -i '/^net\\.ipv4\\.ip_unprivileged_port_start/d' /etc/sysctl.conf; "
-            "echo 'net.ipv4.ip_unprivileged_port_start=53' | "
-            "sudo tee -a /etc/sysctl.conf >/dev/null; "
-            "sudo sysctl --system"
-        ),
-    ])
+    ssh_cmd.extend(
+        [
+            "sh",
+            "-c",
+            (
+                "sudo sed -i '/^net\\.ipv4\\.ip_unprivileged_port_start/d' /etc/sysctl.conf; "
+                "echo 'net.ipv4.ip_unprivileged_port_start=53' | "
+                "sudo tee -a /etc/sysctl.conf >/dev/null; "
+                "sudo sysctl --system"
+            ),
+        ]
+    )
 
     print(
         f"Configuring unprivileged ports in podman machine "
@@ -543,30 +565,36 @@ def run_init(_args):
 def run_deploy(_args):
     print("Deploying Container Development\n")
 
-    user_config = get_config(CONFIG_PATH)
+    user_config_local = get_config(CONFIG_PATH)
 
-    domains = user_config.get("domains")
+    engine_backend = (user_config.get("engine") or "podman").lower()
+    host_gateway = (
+        "host.containers.internal"
+        if engine_backend == "podman"
+        else "host.docker.internal"
+    )
+
+    domains = user_config_local.get("domains")
     if not domains:
         print("Please configure a domain.")
         sys.exit(1)
 
     # mode: optionally mirror URLs into /etc/hosts
-    urls_in_hosts = bool(user_config.get("urls_in_hosts"))
+    urls_in_hosts = bool(user_config_local.get("urls_in_hosts"))
 
     hosts_container_lines = []
     portmap = {}
     port_number = 50100
     vhost_container = []
 
-    podman_host_template = """server {{
+    host_proxy_template = """server {{
     listen 80;
     server_name {url};
     location / {{
-        proxy_pass http://host.containers.internal:{port}/;
+        proxy_pass http://{host_gateway}:{port}/;
         proxy_set_header Host $host;
     }}
 }}
-
 """
 
     for domain_name, domain in domains.items():
@@ -586,7 +614,11 @@ def run_deploy(_args):
             url = f"{folder}.{domain_name}.test"
             hosts_container_lines.append(f"0.0.0.0   {url}\n")
             vhost_container.append(
-                podman_host_template.format(url=url, port=port_number)
+                host_proxy_template.format(
+                    url=url,
+                    port=port_number,
+                    host_gateway=host_gateway,
+                )
             )
             port_number += 1
 
@@ -608,10 +640,10 @@ def run_deploy(_args):
 
 
 def run_add_portmap(args):
-    user_config = get_config(CONFIG_PATH)
+    user_config_local = get_config(CONFIG_PATH)
 
     existing_host_portmapping = get_nested(
-        user_config,
+        user_config_local,
         [
             "domains",
             args.domain_name,
@@ -629,7 +661,7 @@ def run_add_portmap(args):
         )
         sys.exit(1)
 
-    domains = user_config.get("domains") or {}
+    domains = user_config_local.get("domains") or {}
     domain = domains.get(args.domain_name)
     if domain is None:
         print(f"domain, {args.domain_name}, does not exist")
@@ -642,7 +674,7 @@ def run_add_portmap(args):
     host_portmappings[args.host_port] = args.container_port
 
     with open(CONFIG_PATH, "w") as f:
-        json.dump(user_config, f, indent=4)
+        json.dump(user_config_local, f, indent=4)
 
     print(
         f"Created portmapping for '{args.domain_name}.{args.service_name}' "
@@ -651,10 +683,10 @@ def run_add_portmap(args):
 
 
 def run_remove_portmap(args):
-    user_config = get_config(CONFIG_PATH)
+    user_config_local = get_config(CONFIG_PATH)
 
     existing_host_portmapping = get_nested(
-        user_config,
+        user_config_local,
         [
             "domains",
             args.domain_name,
@@ -672,12 +704,12 @@ def run_remove_portmap(args):
         )
         sys.exit(1)
 
-    del user_config["domains"][args.domain_name]["services"][args.service_name][
+    del user_config_local["domains"][args.domain_name]["services"][args.service_name][
         "host_portmappings"
     ][args.host_port]
 
     with open(CONFIG_PATH, "w") as f:
-        json.dump(user_config, f, indent=4)
+        json.dump(user_config_local, f, indent=4)
 
     print(
         f"Removed portmapping for '{args.domain_name}.{args.service_name}' "
@@ -686,36 +718,36 @@ def run_remove_portmap(args):
 
 
 def run_add_domain(args):
-    user_config = get_config(CONFIG_PATH)
+    user_config_local = get_config(CONFIG_PATH)
 
-    existing_domain = get_nested(user_config, ["domains", args.name])
+    existing_domain = get_nested(user_config_local, ["domains", args.name])
     if existing_domain is not None:
         print(f"domain {args.name} already exists at {existing_domain['location']}")
         sys.exit(1)
 
-    user_config.setdefault("domains", {})
-    user_config["domains"][args.name] = {
+    user_config_local.setdefault("domains", {})
+    user_config_local["domains"][args.name] = {
         "location": args.location,
     }
 
     with open(CONFIG_PATH, "w") as f:
-        json.dump(user_config, f, indent=4)
+        json.dump(user_config_local, f, indent=4)
 
     print(f"created '{args.name}' at {args.location}")
 
 
 def run_remove_domain(args):
-    user_config = get_config(CONFIG_PATH)
+    user_config_local = get_config(CONFIG_PATH)
 
-    existing_domain = get_nested(user_config, ["domains", args.name])
+    existing_domain = get_nested(user_config_local, ["domains", args.name])
     if existing_domain is None:
         print(f"domain, {args.name}, does not exist")
         sys.exit(1)
 
-    del user_config["domains"][args.name]
+    del user_config_local["domains"][args.name]
 
     with open(CONFIG_PATH, "w") as f:
-        json.dump(user_config, f, indent=4)
+        json.dump(user_config_local, f, indent=4)
 
     print(f"removed '{args.name}'")
 
@@ -724,8 +756,8 @@ def run_add_environment(args):
     """
     darp add environment <name>
     """
-    user_config = get_config(CONFIG_PATH)
-    environments = user_config.setdefault("environments", {})
+    user_config_local = get_config(CONFIG_PATH)
+    environments = user_config_local.setdefault("environments", {})
 
     if args.name in environments:
         print(f"Environment '{args.name}' already exists.")
@@ -734,7 +766,7 @@ def run_add_environment(args):
     environments[args.name] = {}
 
     with open(CONFIG_PATH, "w") as f:
-        json.dump(user_config, f, indent=4)
+        json.dump(user_config_local, f, indent=4)
 
     print(f"Created environment '{args.name}'.")
 
@@ -743,8 +775,8 @@ def run_rm_environment(args):
     """
     darp rm environment <name>
     """
-    user_config = get_config(CONFIG_PATH)
-    environments = user_config.get("environments") or {}
+    user_config_local = get_config(CONFIG_PATH)
+    environments = user_config_local.get("environments") or {}
 
     if args.name not in environments:
         print(f"Environment '{args.name}' does not exist.")
@@ -754,10 +786,10 @@ def run_rm_environment(args):
 
     # Optionally clean up empty environments dict
     if not environments:
-        user_config.pop("environments", None)
+        user_config_local.pop("environments", None)
 
     with open(CONFIG_PATH, "w") as f:
-        json.dump(user_config, f, indent=4)
+        json.dump(user_config_local, f, indent=4)
 
     print(f"Removed environment '{args.name}'.")
 
@@ -768,8 +800,8 @@ def run_add_volume(args):
 
     host_dir may include the proprietary {pwd} token to be resolved at runtime.
     """
-    user_config = get_config(CONFIG_PATH)
-    environments = user_config.get("environments") or {}
+    user_config_local = get_config(CONFIG_PATH)
+    environments = user_config_local.get("environments") or {}
 
     if not environments:
         print("No environments configured. Use 'darp add environment' first.")
@@ -799,7 +831,7 @@ def run_add_volume(args):
     volumes.append(new_volume)
 
     with open(CONFIG_PATH, "w") as f:
-        json.dump(user_config, f, indent=4)
+        json.dump(user_config_local, f, indent=4)
 
     print(
         f"Added volume to environment '{args.environment}': "
@@ -813,8 +845,8 @@ def run_rm_volume(args):
 
     Remove a specific volume mapping from an environment.
     """
-    user_config = get_config(CONFIG_PATH)
-    environments = user_config.get("environments") or {}
+    user_config_local = get_config(CONFIG_PATH)
+    environments = user_config_local.get("environments") or {}
 
     env = environments.get(args.environment)
     if env is None:
@@ -824,7 +856,8 @@ def run_rm_volume(args):
     volumes = env.get("volumes") or []
 
     new_volumes = [
-        v for v in volumes
+        v
+        for v in volumes
         if not (v.get("container") == args.container_dir and v.get("host") == args.host_dir)
     ]
 
@@ -841,7 +874,7 @@ def run_rm_volume(args):
         env.pop("volumes", None)
 
     with open(CONFIG_PATH, "w") as f:
-        json.dump(user_config, f, indent=4)
+        json.dump(user_config_local, f, indent=4)
 
     print(
         f"Removed volume from environment '{args.environment}': "
@@ -853,8 +886,8 @@ def run_set_serve_command(args):
     """
     darp set serve_command <environment> <serve_command>
     """
-    user_config = get_config(CONFIG_PATH)
-    environments = user_config.get("environments") or {}
+    user_config_local = get_config(CONFIG_PATH)
+    environments = user_config_local.get("environments") or {}
 
     if not environments:
         print("No environments configured. Use 'darp add environment' first.")
@@ -868,7 +901,7 @@ def run_set_serve_command(args):
     env["serve_command"] = args.serve_command
 
     with open(CONFIG_PATH, "w") as f:
-        json.dump(user_config, f, indent=4)
+        json.dump(user_config_local, f, indent=4)
 
     print(
         f"Set serve_command for environment '{args.environment}' to:\n"
@@ -880,8 +913,8 @@ def run_set_image_repository(args):
     """
     darp set image_repository <environment> <image_repository>
     """
-    user_config = get_config(CONFIG_PATH)
-    environments = user_config.get("environments") or {}
+    user_config_local = get_config(CONFIG_PATH)
+    environments = user_config_local.get("environments") or {}
 
     if not environments:
         print("No environments configured. Use 'darp add environment' first.")
@@ -895,7 +928,7 @@ def run_set_image_repository(args):
     env["image_repository"] = args.image_repository
 
     with open(CONFIG_PATH, "w") as f:
-        json.dump(user_config, f, indent=4)
+        json.dump(user_config_local, f, indent=4)
 
     print(
         f"Set image_repository for environment '{args.environment}' to:\n"
@@ -907,8 +940,8 @@ def run_rm_serve_command(args):
     """
     darp rm serve_command <environment>
     """
-    user_config = get_config(CONFIG_PATH)
-    environments = user_config.get("environments") or {}
+    user_config_local = get_config(CONFIG_PATH)
+    environments = user_config_local.get("environments") or {}
 
     # Guard: only allowed if some env has serve_command (per spec)
     if not any(
@@ -932,7 +965,7 @@ def run_rm_serve_command(args):
     del env["serve_command"]
 
     with open(CONFIG_PATH, "w") as f:
-        json.dump(user_config, f, indent=4)
+        json.dump(user_config_local, f, indent=4)
 
     print(f"Removed serve_command from environment '{args.environment}'")
 
@@ -941,8 +974,8 @@ def run_rm_image_repository(args):
     """
     darp rm image_repository <environment>
     """
-    user_config = get_config(CONFIG_PATH)
-    environments = user_config.get("environments") or {}
+    user_config_local = get_config(CONFIG_PATH)
+    environments = user_config_local.get("environments") or {}
 
     # Guard: only allowed if some env has image_repository (per spec)
     if not any(
@@ -969,7 +1002,7 @@ def run_rm_image_repository(args):
     del env["image_repository"]
 
     with open(CONFIG_PATH, "w") as f:
-        json.dump(user_config, f, indent=4)
+        json.dump(user_config_local, f, indent=4)
 
     print(f"Removed image_repository from environment '{args.environment}'")
 
@@ -980,17 +1013,17 @@ def run_set_urls_in_hosts(args):
 
     Enable or disable mirroring Darp URLs into /etc/hosts pointing at 127.0.0.1.
     """
-    user_config = get_config(CONFIG_PATH)
+    user_config_local = get_config(CONFIG_PATH)
     try:
         value = str_to_bool(args.value)
     except ValueError:
         print("urls_in_hosts must be one of: TRUE, FALSE, yes, no, 1, 0.")
         sys.exit(1)
 
-    user_config["urls_in_hosts"] = value
+    user_config_local["urls_in_hosts"] = value
 
     with open(CONFIG_PATH, "w") as f:
-        json.dump(user_config, f, indent=4)
+        json.dump(user_config_local, f, indent=4)
 
     state = "enabled" if value else "disabled"
     print(
@@ -1000,19 +1033,42 @@ def run_set_urls_in_hosts(args):
     )
 
 
+def run_set_engine(args):
+    """
+    darp set engine <podman|docker>
+
+    Set which container engine Darp should use.
+    """
+    engine = args.engine.lower()
+    if engine not in ("podman", "docker"):
+        print("engine must be 'podman' or 'docker'")
+        sys.exit(1)
+
+    user_config_local = get_config(CONFIG_PATH)
+    user_config_local["engine"] = engine
+
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(user_config_local, f, indent=4)
+
+    print(
+        f"Engine set to '{engine}'. "
+        "New Darp invocations will use this container engine."
+    )
+
+
 def run_shell(args):
     """
     darp shell [-e ENV] <container_image>
 
     Starts nginx inside the container (if available) and drops you into a shell.
     """
-    user_config = get_config(CONFIG_PATH)
+    user_config_local = get_config(CONFIG_PATH)
     portmap_config = get_config(PORTMAP_PATH)
 
     # Optional environment
     environment = None
     if args.environment:
-        environment = get_nested(user_config, ["environments", args.environment])
+        environment = get_nested(user_config_local, ["environments", args.environment])
         if environment is None:
             print(f"Environment '{args.environment}' does not exist.")
             sys.exit(1)
@@ -1023,7 +1079,7 @@ def run_shell(args):
     parent_directory = os.path.dirname(current_directory)
     parent_directory_name = os.path.basename(parent_directory)
 
-    domain = get_nested(user_config, ["domains", parent_directory_name])
+    domain = get_nested(user_config_local, ["domains", parent_directory_name])
     if domain is None:
         print(
             f"domain, {parent_directory_name}, does not exist in darp's "
@@ -1033,8 +1089,8 @@ def run_shell(args):
 
     container_name = f"darp_{parent_directory_name}_{current_directory_name}"
 
-    podman_command = [
-        "podman",
+    container_command = [
+        CONTAINER_BIN,
         "run",
         "--rm",
         "-it",
@@ -1057,14 +1113,14 @@ def run_shell(args):
             if not os.path.exists(host_path):
                 print(f"Volume, {volume['host']}, does not appear to exist.")
                 sys.exit(1)
-            podman_command.extend(["-v", f"{host_path}:{volume['container']}"])
+            container_command.extend(["-v", f"{host_path}:{volume['container']}"])
 
     host_portmappings = get_nested(
         domain, ["services", current_directory_name, "host_portmappings"]
     )
     if host_portmappings:
         for host_port, container_port in host_portmappings.items():
-            podman_command.extend(["-p", f"{host_port}:{container_port}"])
+            container_command.extend(["-p", f"{host_port}:{container_port}"])
 
     # Reverse proxy port
     rev_proxy_port = get_nested(
@@ -1077,7 +1133,7 @@ def run_shell(args):
         )
         sys.exit(1)
 
-    podman_command.extend(["-p", f"{rev_proxy_port}:8000"])
+    container_command.extend(["-p", f"{rev_proxy_port}:8000"])
 
     image_name = resolve_image_name(environment, args.container_image)
 
@@ -1092,10 +1148,10 @@ def run_shell(args):
         'cd /app; exec sh'
     )
 
-    podman_command.extend([image_name, "sh", "-c", inner_cmd])
+    container_command.extend([image_name, "sh", "-c", inner_cmd])
 
     # Auto-restart on 137 (OOM or docker-style kill), but NOT on Ctrl+C.
-    run_podman_interactive(podman_command, container_name=container_name, restart_on={137})
+    run_podman_interactive(container_command, container_name=container_name, restart_on={137})
 
 
 def run_serve(args):
@@ -1104,14 +1160,14 @@ def run_serve(args):
 
     Starts nginx inside the container (if available) and runs the environment's serve_command.
     """
-    user_config = get_config(CONFIG_PATH)
+    user_config_local = get_config(CONFIG_PATH)
     portmap_config = get_config(PORTMAP_PATH)
 
     if not args.environment:
         print("Environment is required for 'darp serve' (-e/--environment).")
         sys.exit(1)
 
-    environment = get_nested(user_config, ["environments", args.environment])
+    environment = get_nested(user_config_local, ["environments", args.environment])
     if environment is None:
         print(f"Environment '{args.environment}' does not exist.")
         sys.exit(1)
@@ -1130,7 +1186,7 @@ def run_serve(args):
     parent_directory = os.path.dirname(current_directory)
     parent_directory_name = os.path.basename(parent_directory)
 
-    domain = get_nested(user_config, ["domains", parent_directory_name])
+    domain = get_nested(user_config_local, ["domains", parent_directory_name])
     if domain is None:
         print(
             f"domain, {parent_directory_name}, does not exist in darp's "
@@ -1141,8 +1197,8 @@ def run_serve(args):
     container_name = f"darp_{parent_directory_name}_{current_directory_name}"
 
     while True:
-        podman_command = [
-            "podman",
+        container_command = [
+            CONTAINER_BIN,
             "run",
             "--rm",
             "--name",
@@ -1163,14 +1219,14 @@ def run_serve(args):
             if not os.path.exists(host_path):
                 print(f"Volume, {volume['host']}, does not appear to exist.")
                 sys.exit(1)
-            podman_command.extend(["-v", f"{host_path}:{volume['container']}"])
+            container_command.extend(["-v", f"{host_path}:{volume['container']}"])
 
         host_portmappings = get_nested(
             domain, ["services", current_directory_name, "host_portmappings"]
         )
         if host_portmappings:
             for host_port, container_port in host_portmappings.items():
-                podman_command.extend(["-p", f"{host_port}:{container_port}"])
+                container_command.extend(["-p", f"{host_port}:{container_port}"])
 
         # Reverse proxy port
         rev_proxy_port = get_nested(
@@ -1183,7 +1239,7 @@ def run_serve(args):
             )
             sys.exit(1)
 
-        podman_command.extend(["-p", f"{rev_proxy_port}:8000"])
+        container_command.extend(["-p", f"{rev_proxy_port}:8000"])
 
         image_name = resolve_image_name(environment, args.container_image)
 
@@ -1194,10 +1250,10 @@ def run_serve(args):
             f'cd /app; {serve_command}'
         )
 
-        podman_command.extend([image_name, "sh", "-c", inner_cmd])
+        container_command.extend([image_name, "sh", "-c", inner_cmd])
 
         # For serve, you wanted to auto-restart on rc == 2 (e.g. deploy raced).
-        run_podman_interactive(podman_command, container_name=container_name, restart_on={2})
+        run_podman_interactive(container_command, container_name=container_name, restart_on={2})
         break
 
 
@@ -1335,21 +1391,31 @@ def run_urls(_args):
 
 
 # ---------------------------------------------------------------------------
-# Startup Checks
+# Startup Checks (engine + base config)
 # ---------------------------------------------------------------------------
 
-if not is_podman_running():
-    if PODMAN_MACHINE_ENV:
-        machine_msg = f"Podman machine '{PODMAN_MACHINE_ENV}' appears to be down"
-        hint = f"podman machine start {PODMAN_MACHINE_ENV}"
-    else:
-        machine_msg = "No podman machine appears to be running"
-        hint = "podman machine start"
+user_config = get_config(CONFIG_PATH)
+ENGINE = user_config.get("engine", "podman").lower()
+if ENGINE not in ("podman", "docker"):
+    ENGINE = "podman"
+CONTAINER_BIN = "docker" if ENGINE == "docker" else "podman"
 
-    print(f"{machine_msg} {Fore.RED}({hint}){Style.RESET_ALL}")
+if not is_engine_ready():
+    if ENGINE == "docker":
+        engine_msg = "Docker does not appear to be running"
+        hint = "docker info"
+    else:
+        if PODMAN_MACHINE_ENV:
+            engine_msg = f"Podman machine '{PODMAN_MACHINE_ENV}' appears to be down"
+            hint = f"podman machine start {PODMAN_MACHINE_ENV}"
+        else:
+            engine_msg = "No podman machine appears to be running"
+            hint = "podman machine start"
+
+    print(f"{engine_msg} {Fore.RED}({hint}){Style.RESET_ALL}")
     sys.exit(1)
 
-if not is_unprivileged_port_start(53):
+if not is_unprivileged_port_start(53) and ENGINE == "podman":
     print(
         f"Podman machine '{PODMAN_MACHINE_ENV}' has port 53 privileged "
         f"{Fore.RED}(run 'darp init' or see readme.md){Style.RESET_ALL}"
@@ -1357,8 +1423,6 @@ if not is_unprivileged_port_start(53):
 
 start_reverse_proxy()
 start_darp_masq()
-
-user_config = get_config(CONFIG_PATH)
 
 # ---------------------------------------------------------------------------
 # Help Text Setup
@@ -1421,7 +1485,7 @@ else:
     serve_help_reqs.append("init")
 
 # Also require init if the podman machine hasn't lowered the unprivileged port yet
-if not is_unprivileged_port_start(53):
+if ENGINE == "podman" and not is_unprivileged_port_start(53):
     # Don't duplicate "init" if it's already there, but ensure it's a requirement
     if "init" not in deploy_help_reqs:
         deploy_help_reqs.append("init")
@@ -1568,7 +1632,7 @@ parser_set_darp_root.add_argument(
 )
 parser_set_darp_root.set_defaults(func=run_set_darp_root)
 
-# darp set podman_machine
+# darp set PODMAN_MACHINE
 parser_set_podman_machine = subparser_set.add_parser(
     "PODMAN_MACHINE",
     help=(
@@ -1618,6 +1682,21 @@ parser_set_urls_in_hosts.add_argument(
     help="TRUE or FALSE to enable/disable writing URLs into /etc/hosts",
 )
 parser_set_urls_in_hosts.set_defaults(func=run_set_urls_in_hosts)
+
+# darp set engine
+parser_set_engine = subparser_set.add_parser(
+    "engine",
+    help=(
+        "set container engine (podman|docker) "
+        f"(current: {Fore.GREEN}{ENGINE}{Style.RESET_ALL})"
+    ),
+    usage=argparse.SUPPRESS,
+)
+parser_set_engine.add_argument(
+    "engine",
+    help="container engine to use: podman or docker",
+)
+parser_set_engine.set_defaults(func=run_set_engine)
 
 # darp add
 parser_add = subparsers.add_parser("add", help="add to config", usage=argparse.SUPPRESS)
@@ -1710,9 +1789,7 @@ parser_rm_volume.add_argument("environment", help="the name of the environment")
 parser_rm_volume.add_argument(
     "container_dir", help="the container directory mount path"
 )
-parser_rm_volume.add_argument(
-    "host_dir", help="the host directory"
-)
+parser_rm_volume.add_argument("host_dir", help="the host directory")
 parser_rm_volume.set_defaults(func=run_rm_volume)
 
 # darp rm serve_command
@@ -1740,7 +1817,9 @@ parser_rm_darp_root.set_defaults(func=run_rm_darp_root)
 
 # darp rm PODMAN_MACHINE
 parser_rm_podman_machine = subparser_remove.add_parser(
-    "PODMAN_MACHINE", help="remove PODMAN_MACHINE from shell config", usage=argparse.SUPPRESS
+    "PODMAN_MACHINE",
+    help="remove PODMAN_MACHINE from shell config",
+    usage=argparse.SUPPRESS,
 )
 parser_rm_podman_machine.add_argument(
     "-z", "--zhrc", help="the location of the .zshrc file", required=False

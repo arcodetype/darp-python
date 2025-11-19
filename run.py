@@ -38,7 +38,7 @@ PSEUDO_PWD_TOKEN = "{pwd}"
 # ---------------------------------------------------------------------------
 
 
-def run_podman_interactive(
+def run_container_interactive(
     container_command, container_name: str | None = None, restart_on: set[int] | None = None
 ):
     """
@@ -62,7 +62,7 @@ def run_podman_interactive(
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                if container_name:
+                if container_name and CONTAINER_BIN:
                     subprocess.run(
                         [CONTAINER_BIN, "stop", container_name],
                         stdout=subprocess.DEVNULL,
@@ -123,6 +123,8 @@ def get_config(filename):
 
 def get_running_darps():
     """Return list of running darp_* containers."""
+    if not CONTAINER_BIN:
+        return []
     try:
         output = run_command_capture([CONTAINER_BIN, "ps", "--format", "{{.Names}}"])
         running_containers = output.strip().splitlines()
@@ -144,7 +146,12 @@ def is_machine_rootful(machine_name: str | None = None) -> bool:
     """
     Return True if the podman machine is configured as rootful.
     If detection fails, default to False (treat as rootless).
+
+    (Only relevant when using Podman.)
     """
+    if ENGINE != "podman":
+        return False
+
     if machine_name is None:
         machine_name = PODMAN_MACHINE_ENV
 
@@ -168,13 +175,16 @@ def is_engine_ready():
     - For podman: ensure the relevant podman machine is running.
     - For docker: ensure the daemon is reachable via `docker info`.
     """
+    if ENGINE not in ("podman", "docker"):
+        return False
+
     try:
         if ENGINE == "docker":
             # `docker info` exits non-zero if daemon is not reachable.
             run_command_capture(["docker", "info"])
             return True
 
-        # Default / podman behavior: check machines
+        # Podman behavior: check machines
         output = run_command_capture(
             ["podman", "machine", "list", "--format", "{{.Name}} {{.Running}}"]
         )
@@ -245,6 +255,8 @@ def is_unprivileged_port_start(expected_port):
 
 def is_container_running(container_name):
     """Check if a specific container is running."""
+    if not CONTAINER_BIN:
+        return False
     try:
         output = run_command_capture(
             [CONTAINER_BIN, "ps", "--format", "{{.Names}}"]
@@ -258,6 +270,9 @@ def is_container_running(container_name):
 
 def start_reverse_proxy():
     """Start the nginx reverse proxy container if not running."""
+    if not CONTAINER_BIN:
+        return
+
     if is_container_running(REVERSE_PROXY_CONTAINER):
         return True
 
@@ -284,6 +299,9 @@ def start_reverse_proxy():
 
 def restart_reverse_proxy():
     """Restart the reverse proxy container, or start it if not running."""
+    if not CONTAINER_BIN:
+        return
+
     if not is_container_running(REVERSE_PROXY_CONTAINER):
         return start_reverse_proxy()
 
@@ -298,6 +316,9 @@ def restart_reverse_proxy():
 
 def start_darp_masq():
     """Start the dnsmasq container if not running."""
+    if not CONTAINER_BIN:
+        return
+
     if is_container_running(DNSMASQ_CONTAINER):
         return True
 
@@ -327,6 +348,9 @@ def start_darp_masq():
 
 def stop_running_darp(name):
     """Stop a single darp_* container."""
+    if not CONTAINER_BIN:
+        return
+
     print(f"stopping {Fore.CYAN}{name}{Style.RESET_ALL}")
     stop_command = [CONTAINER_BIN, "stop", name]
 
@@ -507,8 +531,9 @@ def run_init(_args):
     # Configure unprivileged port start inside the Podman machine
     # ------------------------------------------------------------------
     if ENGINE != "podman":
+        engine_label = ENGINE or "not set"
         print(
-            f"Engine is {Fore.GREEN}{ENGINE}{Style.RESET_ALL}; "
+            f"Engine is {Fore.GREEN}{engine_label}{Style.RESET_ALL}; "
             "skipping podman machine sysctl configuration."
         )
         return
@@ -563,11 +588,13 @@ def run_init(_args):
 
 
 def run_deploy(_args):
+    require_engine()
+
     print("Deploying Container Development\n")
 
     user_config_local = get_config(CONFIG_PATH)
 
-    engine_backend = (user_config.get("engine") or "podman").lower()
+    engine_backend = ENGINE
     host_gateway = (
         "host.containers.internal"
         if engine_backend == "podman"
@@ -1062,6 +1089,8 @@ def run_shell(args):
 
     Starts nginx inside the container (if available) and drops you into a shell.
     """
+    require_engine()
+
     user_config_local = get_config(CONFIG_PATH)
     portmap_config = get_config(PORTMAP_PATH)
 
@@ -1151,7 +1180,7 @@ def run_shell(args):
     container_command.extend([image_name, "sh", "-c", inner_cmd])
 
     # Auto-restart on 137 (OOM or docker-style kill), but NOT on Ctrl+C.
-    run_podman_interactive(container_command, container_name=container_name, restart_on={137})
+    run_container_interactive(container_command, container_name=container_name, restart_on={137})
 
 
 def run_serve(args):
@@ -1160,6 +1189,8 @@ def run_serve(args):
 
     Starts nginx inside the container (if available) and runs the environment's serve_command.
     """
+    require_engine()
+
     user_config_local = get_config(CONFIG_PATH)
     portmap_config = get_config(PORTMAP_PATH)
 
@@ -1253,7 +1284,7 @@ def run_serve(args):
         container_command.extend([image_name, "sh", "-c", inner_cmd])
 
         # For serve, you wanted to auto-restart on rc == 2 (e.g. deploy raced).
-        run_podman_interactive(container_command, container_name=container_name, restart_on={2})
+        run_container_interactive(container_command, container_name=container_name, restart_on={2})
         break
 
 
@@ -1289,6 +1320,7 @@ def run_set_podman_machine(args):
     darp set PODMAN_MACHINE <machine_name>
 
     Writes `export PODMAN_MACHINE="<machine_name>"` into the user's shell config.
+    (Only relevant when using Podman as the engine.)
     """
     zshrc_path = os.path.expanduser(args.zhrc or "~/.zshrc")
 
@@ -1395,34 +1427,69 @@ def run_urls(_args):
 # ---------------------------------------------------------------------------
 
 user_config = get_config(CONFIG_PATH)
-ENGINE = user_config.get("engine", "podman").lower()
-if ENGINE not in ("podman", "docker"):
-    ENGINE = "podman"
-CONTAINER_BIN = "docker" if ENGINE == "docker" else "podman"
 
-if not is_engine_ready():
-    if ENGINE == "docker":
-        engine_msg = "Docker does not appear to be running"
-        hint = "docker info"
+raw_engine = user_config.get("engine")
+if raw_engine:
+    raw_engine = raw_engine.lower()
+    if raw_engine in ("podman", "docker"):
+        ENGINE = raw_engine
     else:
-        if PODMAN_MACHINE_ENV:
-            engine_msg = f"Podman machine '{PODMAN_MACHINE_ENV}' appears to be down"
-            hint = f"podman machine start {PODMAN_MACHINE_ENV}"
+        print(
+            f"{Fore.RED}Warning:{Style.RESET_ALL} unknown engine '{raw_engine}' in "
+            f"{CONFIG_PATH}; ignoring. Use 'darp set engine podman|docker'."
+        )
+        ENGINE = None
+else:
+    ENGINE = None
+
+CONTAINER_BIN = "docker" if ENGINE == "docker" else "podman" if ENGINE == "podman" else None
+ENGINE_DISPLAY = ENGINE or "not set"
+
+if ENGINE:
+    if not is_engine_ready():
+        if ENGINE == "docker":
+            engine_msg = "Docker does not appear to be running"
+            hint = "docker info"
         else:
-            engine_msg = "No podman machine appears to be running"
-            hint = "podman machine start"
+            if PODMAN_MACHINE_ENV:
+                engine_msg = f"Podman machine '{PODMAN_MACHINE_ENV}' appears to be down"
+                hint = f"podman machine start {PODMAN_MACHINE_ENV}"
+            else:
+                engine_msg = "No podman machine appears to be running"
+                hint = "podman machine start"
 
-    print(f"{engine_msg} {Fore.RED}({hint}){Style.RESET_ALL}")
-    sys.exit(1)
+        print(f"{engine_msg} {Fore.RED}({hint}){Style.RESET_ALL}")
+        sys.exit(1)
 
-if not is_unprivileged_port_start(53) and ENGINE == "podman":
-    print(
-        f"Podman machine '{PODMAN_MACHINE_ENV}' has port 53 privileged "
-        f"{Fore.RED}(run 'darp init' or see readme.md){Style.RESET_ALL}"
-    )
+    if ENGINE == "podman" and not is_unprivileged_port_start(53):
+        print(
+            f"Podman machine '{PODMAN_MACHINE_ENV}' has port 53 privileged "
+            f"{Fore.RED}(run 'darp init' or see readme.md){Style.RESET_ALL}"
+        )
 
-start_reverse_proxy()
-start_darp_masq()
+    start_reverse_proxy()
+    start_darp_masq()
+
+# ---------------------------------------------------------------------------
+# Helper that engine-using commands call
+# ---------------------------------------------------------------------------
+
+
+def require_engine():
+    """
+    Ensure a container engine is configured.
+
+    Used by commands that actually need to run containers (deploy, shell, serve, etc.).
+    """
+    if ENGINE not in ("podman", "docker") or not CONTAINER_BIN:
+        print(
+            "No container engine is configured.\n\n"
+            "Use one of:\n"
+            f"  {Fore.GREEN}darp set engine podman{Style.RESET_ALL}\n"
+            f"  {Fore.GREEN}darp set engine docker{Style.RESET_ALL}\n"
+        )
+        sys.exit(1)
+
 
 # ---------------------------------------------------------------------------
 # Help Text Setup
@@ -1672,9 +1739,18 @@ parser_set_image_repo.add_argument(
 parser_set_image_repo.set_defaults(func=run_set_image_repository)
 
 # darp set urls_in_hosts
+current_urls_in_hosts = user_config.get("urls_in_hosts")
+if current_urls_in_hosts is None:
+    current_label = f"{Fore.YELLOW}not set{Style.RESET_ALL}"
+else:
+    current_label = f"{Fore.GREEN}{current_urls_in_hosts}{Style.RESET_ALL}"
+
 parser_set_urls_in_hosts = subparser_set.add_parser(
     "urls_in_hosts",
-    help="enable/disable writing Darp URLs into /etc/hosts (TRUE/FALSE)",
+    help=(
+        f"enable/disable writing Darp URLs into /etc/hosts "
+        f"(current: {current_label})"
+    ),
     usage=argparse.SUPPRESS,
 )
 parser_set_urls_in_hosts.add_argument(
@@ -1688,7 +1764,7 @@ parser_set_engine = subparser_set.add_parser(
     "engine",
     help=(
         "set container engine (podman|docker) "
-        f"(current: {Fore.GREEN}{ENGINE}{Style.RESET_ALL})"
+        f"(current: {Fore.GREEN}{ENGINE_DISPLAY}{Style.RESET_ALL})"
     ),
     usage=argparse.SUPPRESS,
 )

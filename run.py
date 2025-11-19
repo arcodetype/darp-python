@@ -26,6 +26,7 @@ VHOST_CONTAINER_CONF = os.path.join(DARP_ROOT, "vhost_container.conf")
 HOSTS_CONTAINER_PATH = os.path.join(DARP_ROOT, "hosts_container")
 NGINX_CONF_PATH = os.path.join(DARP_ROOT, "nginx.conf")
 RESOLVER_FILE = "/etc/resolver/test"
+HOSTS_SYSTEM_PATH = "/etc/hosts"
 
 REVERSE_PROXY_CONTAINER = "darp-reverse-proxy"
 DNSMASQ_CONTAINER = "darp-masq"
@@ -135,6 +136,7 @@ def is_init_initialized():
     except Exception:
         return False
 
+
 def is_machine_rootful(machine_name: str | None = None) -> bool:
     """
     Return True if the podman machine is configured as rootful.
@@ -200,7 +202,6 @@ def is_podman_running():
         return False
 
 
-
 def is_unprivileged_port_start(expected_port):
     """
     Check that net.ipv4.ip_unprivileged_port_start <= expected_port
@@ -227,7 +228,6 @@ def is_unprivileged_port_start(expected_port):
         return actual_port <= expected_port
     except Exception:
         return False
-
 
 
 def is_container_running(container_name):
@@ -351,6 +351,115 @@ def resolve_image_name(environment: dict | None, cli_image: str) -> str:
     return cli_image
 
 
+def str_to_bool(value: str) -> bool:
+    """
+    Convert common TRUE/FALSE style strings to bool.
+    Accepts: true/false, yes/no, 1/0, y/n, on/off (case-insensitive).
+    """
+    v = value.strip().lower()
+    if v in ("true", "1", "yes", "y", "on"):
+        return True
+    if v in ("false", "0", "no", "n", "off"):
+        return False
+    raise ValueError(f"Invalid boolean value: {value}")
+
+
+def sync_system_hosts(hosts_container_lines, enabled: bool):
+    """
+    Ensure that /etc/hosts has (or does not have) a Darp-managed block.
+
+    - When enabled=True: we write a block bracketed by header/trailer comments
+      and map each Darp URL to 127.0.0.1.
+    - When enabled=False: we remove any existing Darp block.
+
+    This uses `sudo` so it will prompt for the user's password as needed.
+    """
+    header = "# --- DARP HOSTS START ---"
+    footer = "# --- DARP HOSTS END ---"
+
+    try:
+        current = run_command_capture(["sudo", "cat", HOSTS_SYSTEM_PATH], text=True)
+    except Exception as e:
+        print(
+            f"{Fore.RED}Warning:{Style.RESET_ALL} unable to read {HOSTS_SYSTEM_PATH} "
+            f"via sudo. Skipping /etc/hosts update.\n({e})"
+        )
+        return
+
+    current = current.replace("\r\n", "\n")
+
+    start = current.find(header)
+    end = -1
+    if start != -1:
+        end = current.find(footer, start)
+        if end != -1:
+            end += len(footer)
+
+    if start != -1 and end != -1:
+        before = current[:start].rstrip("\n")
+        after = current[end:].lstrip("\n")
+    else:
+        before = current.rstrip("\n")
+        after = ""
+
+    if enabled:
+        # Build the new block of Darp URLs -> 127.0.0.1
+        block_lines = [header + "\n"]
+        for line in hosts_container_lines:
+            parts = line.split()
+            if len(parts) >= 2:
+                host = parts[1]
+                block_lines.append(f"127.0.0.1   {host}\n")
+        block_lines.append(footer + "\n")
+        block = "".join(block_lines).rstrip("\n")
+
+        new_parts = []
+        if before:
+            new_parts.append(before.rstrip("\n"))
+        if block:
+            if new_parts:
+                new_parts.append("")
+            new_parts.append(block)
+        if after:
+            if new_parts:
+                new_parts.append("")
+            new_parts.append(after.rstrip("\n"))
+
+        new_contents = "\n".join(new_parts) + "\n"
+    else:
+        # Remove our block if present, keep the rest
+        if before and after:
+            new_contents = before.rstrip("\n") + "\n\n" + after.lstrip("\n")
+        else:
+            new_contents = before or after
+            if new_contents and not new_contents.endswith("\n"):
+                new_contents += "\n"
+
+    if new_contents == current or new_contents == current + "\n":
+        # Nothing to change
+        return
+
+    try:
+        run_command(
+            ["sudo", "tee", HOSTS_SYSTEM_PATH],
+            input=new_contents,
+            text=True,
+        )
+        if enabled:
+            print(
+                f"{Fore.GREEN}{HOSTS_SYSTEM_PATH}{Style.RESET_ALL} updated "
+                "with Darp URL mappings (127.0.0.1)."
+            )
+        else:
+            print(
+                f"Darp URL block removed from {Fore.GREEN}{HOSTS_SYSTEM_PATH}{Style.RESET_ALL}."
+            )
+    except subprocess.CalledProcessError:
+        print(
+            f"{Fore.RED}Warning:{Style.RESET_ALL} failed to update {HOSTS_SYSTEM_PATH} via sudo."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Command Line Functions
 # ---------------------------------------------------------------------------
@@ -441,6 +550,9 @@ def run_deploy(_args):
         print("Please configure a domain.")
         sys.exit(1)
 
+    # New mode: optionally mirror URLs into /etc/hosts
+    urls_in_hosts = bool(user_config.get("urls_in_hosts"))
+
     hosts_container_lines = []
     portmap = {}
     port_number = 50100
@@ -487,8 +599,12 @@ def run_deploy(_args):
     with open(VHOST_CONTAINER_CONF, "w") as file:
         file.writelines(vhost_container)
 
+    # Keep nginx reverse proxy/darp containers up to date
     restart_reverse_proxy()
     stop_running_darps()
+
+    # Optionally update /etc/hosts on the host for corporate DNS edge cases
+    sync_system_hosts(hosts_container_lines, urls_in_hosts)
 
 
 def run_add_portmap(args):
@@ -774,6 +890,32 @@ def run_rm_image_repository(args):
     print(f"Removed image_repository from environment '{args.environment}'")
 
 
+def run_set_urls_in_hosts(args):
+    """
+    darp set urls_in_hosts <TRUE|FALSE>
+
+    Enable or disable mirroring Darp URLs into /etc/hosts pointing at 127.0.0.1.
+    """
+    user_config = get_config(CONFIG_PATH)
+    try:
+        value = str_to_bool(args.value)
+    except ValueError:
+        print("urls_in_hosts must be one of: TRUE, FALSE, yes, no, 1, 0.")
+        sys.exit(1)
+
+    user_config["urls_in_hosts"] = value
+
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(user_config, f, indent=4)
+
+    state = "enabled" if value else "disabled"
+    print(
+        f"urls_in_hosts has been {state} "
+        f"(stored in {CONFIG_PATH}). "
+        "Next 'darp deploy' will sync /etc/hosts accordingly."
+    )
+
+
 def run_shell(args):
     """
     darp shell [-e ENV] <container_image>
@@ -865,8 +1007,6 @@ def run_shell(args):
         'echo ""; '
         'cd /app; exec sh'
     )
-
-
 
     podman_command.extend([image_name, "sh", "-c", inner_cmd])
 
@@ -975,7 +1115,6 @@ def run_serve(args):
         # For serve, you wanted to auto-restart on rc == 2 (e.g. deploy raced).
         run_podman_interactive(podman_command, container_name=container_name, restart_on={2})
         break
-
 
 
 def run_set_darp_root(args):
@@ -1383,6 +1522,18 @@ parser_set_image_repo.add_argument(
     help="base image repository (e.g. git.company.org:4567/path/to/image)",
 )
 parser_set_image_repo.set_defaults(func=run_set_image_repository)
+
+# darp set urls_in_hosts
+parser_set_urls_in_hosts = subparser_set.add_parser(
+    "urls_in_hosts",
+    help="enable/disable writing Darp URLs into /etc/hosts (TRUE/FALSE)",
+    usage=argparse.SUPPRESS,
+)
+parser_set_urls_in_hosts.add_argument(
+    "value",
+    help="TRUE or FALSE to enable/disable writing URLs into /etc/hosts",
+)
+parser_set_urls_in_hosts.set_defaults(func=run_set_urls_in_hosts)
 
 # darp add
 parser_add = subparsers.add_parser("add", help="add to config", usage=argparse.SUPPRESS)

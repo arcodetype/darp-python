@@ -31,7 +31,7 @@ HOSTS_SYSTEM_PATH = "/etc/hosts"
 REVERSE_PROXY_CONTAINER = "darp-reverse-proxy"
 DNSMASQ_CONTAINER = "darp-masq"
 
-PSEUDO_PWD_TOKEN = "{pwd}"  # new proprietary token for "current directory"
+PSEUDO_PWD_TOKEN = "{pwd}"
 
 # ---------------------------------------------------------------------------
 # Helper Functions
@@ -550,7 +550,7 @@ def run_deploy(_args):
         print("Please configure a domain.")
         sys.exit(1)
 
-    # New mode: optionally mirror URLs into /etc/hosts
+    # mode: optionally mirror URLs into /etc/hosts
     urls_in_hosts = bool(user_config.get("urls_in_hosts"))
 
     hosts_container_lines = []
@@ -720,6 +720,48 @@ def run_remove_domain(args):
     print(f"removed '{args.name}'")
 
 
+def run_add_environment(args):
+    """
+    darp add environment <name>
+    """
+    user_config = get_config(CONFIG_PATH)
+    environments = user_config.setdefault("environments", {})
+
+    if args.name in environments:
+        print(f"Environment '{args.name}' already exists.")
+        sys.exit(1)
+
+    environments[args.name] = {}
+
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(user_config, f, indent=4)
+
+    print(f"Created environment '{args.name}'.")
+
+
+def run_rm_environment(args):
+    """
+    darp rm environment <name>
+    """
+    user_config = get_config(CONFIG_PATH)
+    environments = user_config.get("environments") or {}
+
+    if args.name not in environments:
+        print(f"Environment '{args.name}' does not exist.")
+        sys.exit(1)
+
+    del environments[args.name]
+
+    # Optionally clean up empty environments dict
+    if not environments:
+        user_config.pop("environments", None)
+
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(user_config, f, indent=4)
+
+    print(f"Removed environment '{args.name}'.")
+
+
 def run_add_volume(args):
     """
     darp add volume <environment> <container_dir> <host_dir>
@@ -730,7 +772,7 @@ def run_add_volume(args):
     environments = user_config.get("environments") or {}
 
     if not environments:
-        print("No environments configured. Use 'darp add domain' and update config.")
+        print("No environments configured. Use 'darp add environment' first.")
         sys.exit(1)
 
     env = environments.get(args.environment)
@@ -765,6 +807,48 @@ def run_add_volume(args):
     )
 
 
+def run_rm_volume(args):
+    """
+    darp rm volume <environment> <container_dir> <host_dir>
+
+    Remove a specific volume mapping from an environment.
+    """
+    user_config = get_config(CONFIG_PATH)
+    environments = user_config.get("environments") or {}
+
+    env = environments.get(args.environment)
+    if env is None:
+        print(f"Environment '{args.environment}' does not exist.")
+        sys.exit(1)
+
+    volumes = env.get("volumes") or []
+
+    new_volumes = [
+        v for v in volumes
+        if not (v.get("container") == args.container_dir and v.get("host") == args.host_dir)
+    ]
+
+    if len(new_volumes) == len(volumes):
+        print(
+            f"No matching volume found in environment '{args.environment}' "
+            f"for host '{args.host_dir}' -> container '{args.container_dir}'."
+        )
+        sys.exit(1)
+
+    if new_volumes:
+        env["volumes"] = new_volumes
+    else:
+        env.pop("volumes", None)
+
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(user_config, f, indent=4)
+
+    print(
+        f"Removed volume from environment '{args.environment}': "
+        f"{args.host_dir} -> {args.container_dir}"
+    )
+
+
 def run_set_serve_command(args):
     """
     darp set serve_command <environment> <serve_command>
@@ -773,7 +857,7 @@ def run_set_serve_command(args):
     environments = user_config.get("environments") or {}
 
     if not environments:
-        print("No environments configured. Use 'darp add domain' and update config.")
+        print("No environments configured. Use 'darp add environment' first.")
         sys.exit(1)
 
     env = environments.get(args.environment)
@@ -800,7 +884,7 @@ def run_set_image_repository(args):
     environments = user_config.get("environments") or {}
 
     if not environments:
-        print("No environments configured. Use 'darp add domain' and update config.")
+        print("No environments configured. Use 'darp add environment' first.")
         sys.exit(1)
 
     env = environments.get(args.environment)
@@ -1557,6 +1641,12 @@ parser_add_domain.add_argument("name", help="the name of the domain")
 parser_add_domain.add_argument("location", help="the location of the domain")
 parser_add_domain.set_defaults(func=run_add_domain)
 
+parser_add_environment = subparser_add.add_parser(
+    "environment", help="add environment", usage=argparse.SUPPRESS
+)
+parser_add_environment.add_argument("name", help="the name of the environment")
+parser_add_environment.set_defaults(func=run_add_environment)
+
 # darp add volume
 parser_add_volume = subparser_add.add_parser(
     "volume", help=add_volume_help_text, usage=argparse.SUPPRESS
@@ -1606,6 +1696,24 @@ parser_remove_domain.add_argument(
     help="(optional) the location of the domain (ignored)",
 )
 parser_remove_domain.set_defaults(func=run_remove_domain)
+
+parser_remove_environment = subparser_remove.add_parser(
+    "environment", help="remove environment", usage=argparse.SUPPRESS
+)
+parser_remove_environment.add_argument("name", help="the name of the environment")
+parser_remove_environment.set_defaults(func=run_rm_environment)
+
+parser_rm_volume = subparser_remove.add_parser(
+    "volume", help="remove volume from an environment", usage=argparse.SUPPRESS
+)
+parser_rm_volume.add_argument("environment", help="the name of the environment")
+parser_rm_volume.add_argument(
+    "container_dir", help="the container directory mount path"
+)
+parser_rm_volume.add_argument(
+    "host_dir", help="the host directory"
+)
+parser_rm_volume.set_defaults(func=run_rm_volume)
 
 # darp rm serve_command
 parser_rm_serve = subparser_remove.add_parser(

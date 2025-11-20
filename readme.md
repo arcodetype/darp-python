@@ -99,6 +99,8 @@ Now test the endpoint from another terminal:
 curl http://hello-world.projects.test
 ```
 
+> Note: If your endpoint is unresponsive, try `darp set urls_in_hosts True`. It's possible that the `darp-masq` image is not resolving correctly. After turning on, a computer password will be required on future runs of the `darp deploy` command.
+
 Try editing files inside the hello-world project directory in your editor:
 
 - Docker: Air automatically reloads on file changes.

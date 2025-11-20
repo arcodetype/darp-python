@@ -519,7 +519,7 @@ def run_init(_args):
     os.makedirs(DNSMASQ_DIR, exist_ok=True)
 
     # Copy nginx.conf to DARP_ROOT
-    run_command(["cp", "nginx.conf", DARP_ROOT])
+    run_command(["cp", "/usr/local/opt/darp/nginx.conf", DARP_ROOT])
 
     test_conf_path = os.path.join(DNSMASQ_DIR, "test.conf")
     with open(test_conf_path, "w") as file:

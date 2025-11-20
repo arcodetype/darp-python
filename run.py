@@ -709,7 +709,7 @@ def run_add_portmap(args):
     )
 
 
-def run_remove_portmap(args):
+def run_rm_portmap(args):
     user_config_local = get_config(CONFIG_PATH)
 
     existing_host_portmapping = get_nested(
@@ -763,7 +763,7 @@ def run_add_domain(args):
     print(f"created '{args.name}' at {args.location}")
 
 
-def run_remove_domain(args):
+def run_rm_domain(args):
     user_config_local = get_config(CONFIG_PATH)
 
     existing_domain = get_nested(user_config_local, ["domains", args.name])
@@ -1284,7 +1284,7 @@ def run_serve(args):
         container_command.extend([image_name, "sh", "-c", inner_cmd])
 
         # For serve, you wanted to auto-restart on rc == 2 (e.g. deploy raced).
-        run_container_interactive(container_command, container_name=container_name, restart_on={2})
+        run_container_interactive(container_command, container_name=container_name, restart_on={0, 2})
         break
 
 
@@ -1464,7 +1464,7 @@ if ENGINE:
     if ENGINE == "podman" and not is_unprivileged_port_start(53):
         print(
             f"Podman machine '{PODMAN_MACHINE_ENV}' has port 53 privileged "
-            f"{Fore.RED}(run 'darp init' or see readme.md){Style.RESET_ALL}"
+            f"{Fore.RED}(run 'darp init'){Style.RESET_ALL}"
         )
 
     start_reverse_proxy()
@@ -1682,6 +1682,7 @@ subparser_set = parser_set.add_subparsers(
     dest="set_command", help="set any of the following in the config"
 )
 
+# darp set DARP_ROOT
 parser_set_darp_root = subparser_set.add_parser(
     "DARP_ROOT",
     help=f"set DARP_ROOT (current: {Fore.GREEN}{DARP_ROOT}{Style.RESET_ALL})",
@@ -1717,15 +1718,20 @@ parser_set_podman_machine.add_argument(
 )
 parser_set_podman_machine.set_defaults(func=run_set_podman_machine)
 
-# darp set serve_command
-parser_set_serve = subparser_set.add_parser(
-    "serve_command", help=set_serve_help_text, usage=argparse.SUPPRESS
+# darp set engine
+parser_set_engine = subparser_set.add_parser(
+    "engine",
+    help=(
+        "set container engine (podman|docker) "
+        f"(current: {Fore.GREEN}{ENGINE_DISPLAY}{Style.RESET_ALL})"
+    ),
+    usage=argparse.SUPPRESS,
 )
-parser_set_serve.add_argument("environment", help="the name of the environment")
-parser_set_serve.add_argument(
-    "serve_command", help="the command to run inside the container for this environment"
+parser_set_engine.add_argument(
+    "engine",
+    help="container engine to use: podman or docker",
 )
-parser_set_serve.set_defaults(func=run_set_serve_command)
+parser_set_engine.set_defaults(func=run_set_engine)
 
 # darp set image_repository
 parser_set_image_repo = subparser_set.add_parser(
@@ -1737,6 +1743,16 @@ parser_set_image_repo.add_argument(
     help="base image repository (e.g. git.company.org:4567/path/to/image)",
 )
 parser_set_image_repo.set_defaults(func=run_set_image_repository)
+
+# darp set serve_command
+parser_set_serve = subparser_set.add_parser(
+    "serve_command", help=set_serve_help_text, usage=argparse.SUPPRESS
+)
+parser_set_serve.add_argument("environment", help="the name of the environment")
+parser_set_serve.add_argument(
+    "serve_command", help="the command to run inside the container for this environment"
+)
+parser_set_serve.set_defaults(func=run_set_serve_command)
 
 # darp set urls_in_hosts
 current_urls_in_hosts = user_config.get("urls_in_hosts")
@@ -1759,27 +1775,28 @@ parser_set_urls_in_hosts.add_argument(
 )
 parser_set_urls_in_hosts.set_defaults(func=run_set_urls_in_hosts)
 
-# darp set engine
-parser_set_engine = subparser_set.add_parser(
-    "engine",
-    help=(
-        "set container engine (podman|docker) "
-        f"(current: {Fore.GREEN}{ENGINE_DISPLAY}{Style.RESET_ALL})"
-    ),
-    usage=argparse.SUPPRESS,
-)
-parser_set_engine.add_argument(
-    "engine",
-    help="container engine to use: podman or docker",
-)
-parser_set_engine.set_defaults(func=run_set_engine)
-
 # darp add
 parser_add = subparsers.add_parser("add", help="add to config", usage=argparse.SUPPRESS)
 subparser_add = parser_add.add_subparsers(
     dest="add_command", help="add any of the following to the config"
 )
 
+# darp add domain
+parser_add_domain = subparser_add.add_parser(
+    "domain", help="add domain", usage=argparse.SUPPRESS
+)
+parser_add_domain.add_argument("name", help="the name of the domain")
+parser_add_domain.add_argument("location", help="the location of the domain")
+parser_add_domain.set_defaults(func=run_add_domain)
+
+# darp add environment
+parser_add_environment = subparser_add.add_parser(
+    "environment", help="add environment", usage=argparse.SUPPRESS
+)
+parser_add_environment.add_argument("name", help="the name of the environment")
+parser_add_environment.set_defaults(func=run_add_environment)
+
+# darp add portmap
 parser_add_portmap = subparser_add.add_parser(
     "portmap", help="add port mapping to a service", usage=argparse.SUPPRESS
 )
@@ -1788,19 +1805,6 @@ parser_add_portmap.add_argument("service_name", help="the name of the service")
 parser_add_portmap.add_argument("host_port", type=str, help="the host port")
 parser_add_portmap.add_argument("container_port", type=str, help="the container port")
 parser_add_portmap.set_defaults(func=run_add_portmap)
-
-parser_add_domain = subparser_add.add_parser(
-    "domain", help="add domain", usage=argparse.SUPPRESS
-)
-parser_add_domain.add_argument("name", help="the name of the domain")
-parser_add_domain.add_argument("location", help="the location of the domain")
-parser_add_domain.set_defaults(func=run_add_domain)
-
-parser_add_environment = subparser_add.add_parser(
-    "environment", help="add environment", usage=argparse.SUPPRESS
-)
-parser_add_environment.add_argument("name", help="the name of the environment")
-parser_add_environment.set_defaults(func=run_add_environment)
 
 # darp add volume
 parser_add_volume = subparser_add.add_parser(
@@ -1819,68 +1823,13 @@ parser_add_volume.add_argument(
 )
 parser_add_volume.set_defaults(func=run_add_volume)
 
-# darp remove
+# darp rm
 parser_remove = subparsers.add_parser(
     "rm", help="remove from config", usage=argparse.SUPPRESS
 )
 subparser_remove = parser_remove.add_subparsers(
     dest="remove_command", help="remove any of the following from the config"
 )
-
-parser_remove_portmap = subparser_remove.add_parser(
-    "portmap", help="remove port mapping from a service", usage=argparse.SUPPRESS
-)
-parser_remove_portmap.add_argument("domain_name", help="the name of the domain")
-parser_remove_portmap.add_argument("service_name", help="the name of the service")
-parser_remove_portmap.add_argument("host_port", type=str, help="the host port")
-parser_remove_portmap.add_argument(
-    "container_port",
-    nargs="?",
-    type=str,
-    help="(optional) container port (ignored)",
-)
-parser_remove_portmap.set_defaults(func=run_remove_portmap)
-
-parser_remove_domain = subparser_remove.add_parser(
-    "domain", help="remove domain", usage=argparse.SUPPRESS
-)
-parser_remove_domain.add_argument("name", help="the name of the domain")
-parser_remove_domain.add_argument(
-    "location",
-    nargs="?",
-    help="(optional) the location of the domain (ignored)",
-)
-parser_remove_domain.set_defaults(func=run_remove_domain)
-
-parser_remove_environment = subparser_remove.add_parser(
-    "environment", help="remove environment", usage=argparse.SUPPRESS
-)
-parser_remove_environment.add_argument("name", help="the name of the environment")
-parser_remove_environment.set_defaults(func=run_rm_environment)
-
-parser_rm_volume = subparser_remove.add_parser(
-    "volume", help="remove volume from an environment", usage=argparse.SUPPRESS
-)
-parser_rm_volume.add_argument("environment", help="the name of the environment")
-parser_rm_volume.add_argument(
-    "container_dir", help="the container directory mount path"
-)
-parser_rm_volume.add_argument("host_dir", help="the host directory")
-parser_rm_volume.set_defaults(func=run_rm_volume)
-
-# darp rm serve_command
-parser_rm_serve = subparser_remove.add_parser(
-    "serve_command", help=rm_serve_help_text, usage=argparse.SUPPRESS
-)
-parser_rm_serve.add_argument("environment", help="the name of the environment")
-parser_rm_serve.set_defaults(func=run_rm_serve_command)
-
-# darp rm image_repository
-parser_rm_image_repo = subparser_remove.add_parser(
-    "image_repository", help=rm_image_repo_help_text, usage=argparse.SUPPRESS
-)
-parser_rm_image_repo.add_argument("environment", help="the name of the environment")
-parser_rm_image_repo.set_defaults(func=run_rm_image_repository)
 
 # darp rm DARP_ROOT
 parser_rm_darp_root = subparser_remove.add_parser(
@@ -1901,6 +1850,65 @@ parser_rm_podman_machine.add_argument(
     "-z", "--zhrc", help="the location of the .zshrc file", required=False
 )
 parser_rm_podman_machine.set_defaults(func=run_rm_podman_machine)
+
+# darp rm domain
+parser_rm_domain = subparser_remove.add_parser(
+    "domain", help="remove domain", usage=argparse.SUPPRESS
+)
+parser_rm_domain.add_argument("name", help="the name of the domain")
+parser_rm_domain.add_argument(
+    "location",
+    nargs="?",
+    help="(optional) the location of the domain (ignored)",
+)
+parser_rm_domain.set_defaults(func=run_rm_domain)
+
+# darp rm environment
+parser_rm_environment = subparser_remove.add_parser(
+    "environment", help="remove environment", usage=argparse.SUPPRESS
+)
+parser_rm_environment.add_argument("name", help="the name of the environment")
+parser_rm_environment.set_defaults(func=run_rm_environment)
+
+# darp rm image_repository
+parser_rm_image_repo = subparser_remove.add_parser(
+    "image_repository", help=rm_image_repo_help_text, usage=argparse.SUPPRESS
+)
+parser_rm_image_repo.add_argument("environment", help="the name of the environment")
+parser_rm_image_repo.set_defaults(func=run_rm_image_repository)
+
+# darp rm portmap
+parser_rm_portmap = subparser_remove.add_parser(
+    "portmap", help="remove port mapping from a service", usage=argparse.SUPPRESS
+)
+parser_rm_portmap.add_argument("domain_name", help="the name of the domain")
+parser_rm_portmap.add_argument("service_name", help="the name of the service")
+parser_rm_portmap.add_argument("host_port", type=str, help="the host port")
+parser_rm_portmap.add_argument(
+    "container_port",
+    nargs="?",
+    type=str,
+    help="(optional) container port (ignored)",
+)
+parser_rm_portmap.set_defaults(func=run_rm_portmap)
+
+# darp rm volume
+parser_rm_volume = subparser_remove.add_parser(
+    "volume", help="remove volume from an environment", usage=argparse.SUPPRESS
+)
+parser_rm_volume.add_argument("environment", help="the name of the environment")
+parser_rm_volume.add_argument(
+    "container_dir", help="the container directory mount path"
+)
+parser_rm_volume.add_argument("host_dir", help="the host directory")
+parser_rm_volume.set_defaults(func=run_rm_volume)
+
+# darp rm serve_command
+parser_rm_serve = subparser_remove.add_parser(
+    "serve_command", help=rm_serve_help_text, usage=argparse.SUPPRESS
+)
+parser_rm_serve.add_argument("environment", help="the name of the environment")
+parser_rm_serve.set_defaults(func=run_rm_serve_command)
 
 # darp urls
 parser_urls = subparsers.add_parser(

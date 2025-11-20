@@ -1,57 +1,107 @@
-# Container Development
+# darp
 
-## Goals
+## Installation
 
-- Easily be able to start a project using any programming language
-- Have this project interact with other projects that are running locally
-
-## Required Setup
-
-1. set a domain
-
-## Build
+1. Clone the repo to your computer.
+1. Run
 
 ```sh
-pyinstaller --name darp --onefile run.py
+./deploy.sh
 ```
 
-## Setup
+## CLI Reference
 
-Have a directory for projects that get a port and DNS settings automatically assigned to them:
+[cli-reference.md](cli-reference.md)
 
-- products.<service-name>.arcodetype.test
-- projects.<service-name>.arcodetype.test
-- sandbox.<service-name>.arcodetype.test
+## Tutorial
+
+This tutorial takes you through running a simple Go API with darp.
+
+> Note: The examples use Docker, but everything works with Podman by substituting `docker` → `podman`.
+
+> Note: If you switch between Docker and Podman, you must run `darp deploy` again so the reverse-proxy configuration can be refreshed.
+
+### Step One: Set Up a Projects Domain
+
+Initialize darp and configure a folder to be reverse-proxied:
 
 ```sh
-podman machine init --cpus 6 --disk-size 100 --memory 8192 \
-  -v /Users:/Users -v /private:/private -v /var/folders:/var/folders -v /Volumes/ritic/users:/Volumes/ritic/users
-
-# Init and start the VM
-podman machine init --now \
-  --cpus 6 --disk-size 100 --memory 8192 \
-  -v /Users:/Users -v /private:/private -v /var/folders:/var/folders -v /Volumes/ritic/users:/Volumes/ritic/users
-
-# Set the sysctl inside the VM and apply it immediately
-podman machine ssh "echo 'net.ipv4.ip_unprivileged_port_start=53' \
-  | sudo tee /etc/sysctl.d/99-unprivileged-ports.conf >/dev/null && sudo sysctl --system"
+darp init
+darp set engine docker
+darp add domain ~/projects
+darp mkdir ~/projects/hello-world
+darp deploy
+darp urls
 ```
 
-### Ports
+> Note: After creating any new project inside `~/projects`, run `darp deploy` so darp can register it.
 
-The API container port is always `8000`. The host API port is assigned on `darp deploy` 
+### Step Two: Create Your First "darp compatible" Image
 
-## Potential Commands
+#### Requirements
 
-darp serve <image>
-darp shell <image>
-darp serve -e go <go-image>
-darp shell -e go <go-image>
-darp serve -e laravel <php-image>
-darp shell -e laravel <php-image>
-darp serve -e node <node-image>
-darp shell -e node <node-image>
-darp serve -e python <python-image>
-darp shell -e python <python-image>
-darp serve -e vue <vue-image>
-darp shell -e vue <vue-image>
+A darp-compatible image must:
+- Be based on Alpine
+- Have nginx installed
+
+```sh
+cd ~/projects/hello-world
+echo "FROM golang:1.25-alpine3.22\n\nRUN apk add nginx && go install github.com/air-verse/air@latest\n\nWORKDIR /app" > Dockerfile
+docker build -t darp-go .
+```
+
+Resulting Dockerfile:
+
+```dockerfile
+FROM golang:1.25-alpine3.22
+
+RUN apk add nginx && go install github.com/air-verse/air@latest
+
+WORKDIR /app
+```
+
+### Step Three: Shell Into Your Project (Changes Persist Locally)
+
+Start a darp shell session using your image:
+```sh
+darp shell darp-go
+```
+
+Inside the container:
+```sh
+echo 'package main;import("net/http");func main(){http.HandleFunc("/",func(w http.ResponseWriter,r *http.Request){w.Write([]byte("We are darping! Edit Me\n"))});http.ListenAndServe(":8000",nil)}' > main.go
+
+go mod init arcodetype.test
+go mod tidy
+air init
+```
+
+
+### Step Four: Serve Your Project
+
+Different tech stacks will use different serve commands. For this example, we'll use Air:
+
+> Note: Updating values via `darp add`, `darp set`, and `darp rm` automatically updates `~/.darp/config.json`. Advanced users may edit this file manually, but using darp commands is recommended.
+
+#### Requirements for `darp serve`
+
+- Your API must listen on `port 8000` inside the container.
+
+Configure and run:
+```sh
+darp add environment go
+darp set serve_command go 'air'
+darp serve -e go darp-go
+```
+
+Now test the endpoint from another terminal:
+```sh
+curl http://hello-world.projects.test
+```
+
+Try editing files inside the hello-world project directory in your editor:
+
+- Docker: Air automatically reloads on file changes.
+- Podman: You must edit .air.toml and change
+poll = false → poll = true so changes are detected.
+

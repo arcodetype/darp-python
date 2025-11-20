@@ -2,6 +2,9 @@
 
 set -e
 
+pip3 install pyinstaller
+pip3 install colorama
+
 # Always run relative to this script's directory (project root)
 SCRIPT_DIR="$(cd -- "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"

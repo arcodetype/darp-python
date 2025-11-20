@@ -747,20 +747,21 @@ def run_rm_portmap(args):
 def run_add_domain(args):
     user_config_local = get_config(CONFIG_PATH)
 
-    existing_domain = get_nested(user_config_local, ["domains", args.name])
+    domain_name = os.path.basename(args.location)
+    existing_domain = get_nested(user_config_local, ["domains", domain_name])
     if existing_domain is not None:
-        print(f"domain {args.name} already exists at {existing_domain['location']}")
+        print(f"domain {domain_name} already exists at {existing_domain['location']}")
         sys.exit(1)
 
     user_config_local.setdefault("domains", {})
-    user_config_local["domains"][args.name] = {
+    user_config_local["domains"][domain_name] = {
         "location": args.location,
     }
 
     with open(CONFIG_PATH, "w") as f:
         json.dump(user_config_local, f, indent=4)
 
-    print(f"created '{args.name}' at {args.location}")
+    print(f"created '{domain_name}' at {args.location}")
 
 
 def run_rm_domain(args):
@@ -1785,7 +1786,6 @@ subparser_add = parser_add.add_subparsers(
 parser_add_domain = subparser_add.add_parser(
     "domain", help="add domain", usage=argparse.SUPPRESS
 )
-parser_add_domain.add_argument("name", help="the name of the domain")
 parser_add_domain.add_argument("location", help="the location of the domain")
 parser_add_domain.set_defaults(func=run_add_domain)
 

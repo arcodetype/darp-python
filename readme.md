@@ -1,6 +1,8 @@
 # darp
 
-## Installation
+This version of the darp project is now officially deprecated. Please see the [darp-rust](https://github.com/arcodetype/darp-rust) project which has replaced it.
+
+## ~~Installation~~
 
 1. Clone the repo to your computer.
 1. Run
@@ -9,11 +11,11 @@
 ./deploy.sh
 ```
 
-## CLI Reference
+## ~~CLI Reference~~
 
 [cli-reference.md](cli-reference.md)
 
-## Tutorial
+## ~~Tutorial~~
 
 This tutorial takes you through running a simple Go API with darp.
 

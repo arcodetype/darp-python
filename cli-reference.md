@@ -1,6 +1,6 @@
 # darp CLI Reference
 
-`darp` (<span style="color:#d670d6">d</span>irectories <span style="color:#d670d6">a</span>uto-r<span style="color:#d670d6">r</span>everse <span style="color:#d670d6">p</span>roxied) is a CLI that automatically reverse-proxies local project folders into nice `.test` domains (e.g. `hello-world.projects.test`) using Docker or Podman, nginx, and dnsmasq.
+`darp` (<span style="color:#d670d6">d</span>irectories <span style="color:#d670d6">a</span>uto-<span style="color:#d670d6">r</span>everse <span style="color:#d670d6">p</span>roxied) is a CLI that automatically reverse-proxies local project folders into nice `.test` domains (e.g. `hello-world.projects.test`) using Docker or Podman, nginx, and dnsmasq.
 
 This document describes all available commands and how they interact.
 
